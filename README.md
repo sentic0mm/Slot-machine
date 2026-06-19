@@ -2,7 +2,7 @@ das ganze projekt ist wichtig nicht nur eine file öffnen
 
 um die den gamble zu starten geht auf diese seite:
 
-https://sentic0mm.github.io/Hallotggj/
+https://sentic0mm.github.io/Slot-machine/
 --------------------------------------------------
 <h2>⚠️Achtung</h2>
 
