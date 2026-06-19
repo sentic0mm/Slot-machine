@@ -8,9 +8,7 @@
 <link rel="manifest" href="manifest.json">
 
 <style>
-/* =======================
-   BASIC LAYOUT
-======================= */
+   
 body {
     margin: 0;
     background: #1b1b1b;
@@ -23,7 +21,6 @@ body {
     min-height: 100vh;
 }
 
-/* LEFT SIDE */
 .left {
     width: 180px;
     display: flex;
@@ -48,7 +45,6 @@ body {
     transform: rotate(25deg);
 }
 
-/* RIGHT SIDE */
 .right {
     flex: 1;
     padding: 30px;
@@ -59,7 +55,6 @@ body {
     margin-bottom: 20px;
 }
 
-/* REELS */
 .reels {
     display: flex;
     gap: 20px;
@@ -79,14 +74,12 @@ body {
     box-shadow: 0 0 15px #000;
 }
 
-/* STATUS */
 .status {
     font-size: 28px;
     min-height: 40px;
     margin-bottom: 20px;
 }
 
-/* INPUTS */
 label {
     display: block;
     margin-top: 15px;
@@ -98,7 +91,6 @@ input {
     font-size: 18px;
 }
 
-/* BUTTONS */
 .buttons {
     margin-top: 25px;
 }
@@ -110,7 +102,6 @@ input {
     cursor: pointer;
 }
 
-/* COLORS */
 .win { color: #00ff66; }
 .lose { color: #ff5555; }
 .jackpot { color: gold; }
@@ -123,14 +114,12 @@ input {
 
 <div class="container">
 
-    <!-- LEFT -->
     <div class="left">
         <button id="lever">
-            🔴<br>│<br>│<br>│<br>■■■■■
+            🔴<br>│<br>│<br>│<br>■■■
         </button>
     </div>
 
-    <!-- RIGHT -->
     <div class="right">
 
         <div class="money" id="money">Geld: 10.00$</div>
@@ -158,9 +147,7 @@ input {
 </div>
 
 <script>
-/* =======================
-   GAME DATA
-======================= */
+   
 const symbols = ["🍒","🍋","⭐","🔔","7️⃣","💎"];
 
 let money = 10;
@@ -171,9 +158,6 @@ const r2 = document.getElementById("r2");
 const r3 = document.getElementById("r3");
 const statusBox = document.getElementById("status");
 
-/* =======================
-   UI HELPERS
-======================= */
 function updateMoney() {
     document.getElementById("money").innerText =
         "Geld: " + money.toFixed(2) + "$";
@@ -183,9 +167,6 @@ function randomSymbol() {
     return symbols[Math.floor(Math.random() * symbols.length)];
 }
 
-/* =======================
-   SPIN LOGIC
-======================= */
 function spinReel(reel, duration) {
     return new Promise(resolve => {
         let interval = setInterval(() => {
@@ -201,9 +182,6 @@ function spinReel(reel, duration) {
     });
 }
 
-/* =======================
-   MAIN GAME LOOP
-======================= */
 async function startSpin() {
     if (spinning) return;
 
@@ -259,9 +237,6 @@ async function startSpin() {
     spinning = false;
 }
 
-/* =======================
-   EVENTS
-======================= */
 document.getElementById("lever").addEventListener("click", startSpin);
 
 document.getElementById("btnRefresh").addEventListener("click", () => {
@@ -277,10 +252,8 @@ document.getElementById("btnCashOut").addEventListener("click", () => {
     statusBox.innerText = "Ausgezahlt: " + money.toFixed(2) + "$";
 });
 
-/* INIT */
 updateMoney();
 
-/* SERVICE WORKER */
 if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js");
 }
