@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gamblen ist toll</title>
+<link rel="manifest" href="manifest.json">
+<style>
+body{margin:0;background:#1b1b1b;color:white;font-family:Arial,sans-serif;}
+.container{display:flex;min-height:100vh;}
+.left{width:180px;display:flex;justify-content:center;align-items:center;background:#111;}
+#lever{width:120px;height:260px;font-size:26px;cursor:pointer;border:none;border-radius:15px;background:#444;color:white;transition:transform .25s;}
+.lever-pulled{transform:rotate(25deg);}
+.right{flex:1;padding:30px;}
+.money{font-size:38px;margin-bottom:20px;}
+.reels{display:flex;gap:20px;margin:30px 0;}
+.reel{width:130px;height:130px;background:white;color:black;font-size:70px;display:flex;align-items:center;justify-content:center;border-radius:15px;box-shadow:0 0 15px #000;}
+.status{font-size:28px;min-height:40px;margin-bottom:20px;}
+label{display:block;margin-top:15px;}
+input{width:200px;padding:10px;font-size:18px;}
+.buttons{margin-top:25px;}
+.buttons button{padding:12px 20px;font-size:18px;margin-right:10px;cursor:pointer;}
+.win{color:#00ff66;}.lose{color:#ff5555;}.jackpot{color:gold;}
+</style>
+</head>
+<body>
+<button id="btnRefresh">refresh moneten</button>
+<div class="container">
+<div class="left"><button id="lever">🔴<br>│<br>│<br>│<br>■■■■■</button></div>
+<div class="right">
+<div class="money" id="money">Geld: 10.00$</div>
+<div class="reels">
+<div class="reel" id="r1">🍒</div>
+<div class="reel" id="r2">🍋</div>
+<div class="reel" id="r3">⭐</div>
+</div>
+<div class="status" id="status">Hebel ziehen!</div>
+<label>Einsatz</label><input id="bet" value="1" type="number" min="1">
+<label>Anzahl Spins</label><input id="spinCount" value="1" type="number" min="1">
+<div class="buttons"><button id="btnAllIn">ALL IN</button><button id="btnCashOut">CASH OUT</button></div>
+</div></div>
+<script>
+const symbols=["🍒","🍋","⭐","🔔","7️⃣","💎"];
+let money=10,animating=false,spinsLeft=0,betValue=1;
+const r1=document.getElementById("r1"),r2=document.getElementById("r2"),r3=document.getElementById("r3");
+const statusBox=document.getElementById("status");
+function updateMoney(){document.getElementById("money").innerText="Geld: "+money.toFixed(2)+"$";}
+function randomSymbol(){return symbols[Math.floor(Math.random()*symbols.length)];}
+function allIn(){document.getElementById("bet").value=Math.max(1,Math.floor(money));}
+function cashOut(){statusBox.className="status";statusBox.innerText="Ausgezahlt: "+money.toFixed(2)+"$";}
+document.getElementById("lever").addEventListener("click",startSpin);
+document.getElementById("btnRefresh").addEventListener("click",()=>window.location.reload());
+document.getElementById("btnAllIn").addEventListener("click",allIn);
+document.getElementById("btnCashOut").addEventListener("click",cashOut);
+function startSpin(){
+if(animating)return;
+betValue=parseFloat(document.getElementById("bet").value);
+spinsLeft=parseInt(document.getElementById("spinCount").value);
+if(isNaN(betValue)||isNaN(spinsLeft)){statusBox.innerText="Fehler!";return;}
+if(betValue<1){statusBox.innerText="Mindesteinsatz 1$";return;}
+animating=true;
+const lever=document.getElementById("lever");
+lever.classList.add("lever-pulled");
+setTimeout(()=>lever.classList.remove("lever-pulled"),250);
+runSpin();
+}
+function runSpin(){
+if(spinsLeft<=0){animating=false;return;}
+if(money<betValue){statusBox.innerText="Kein Geld mehr!";animating=false;return;}
+money-=betValue;updateMoney();
+let counter=0;
+let animation=setInterval(()=>{
+r1.innerText=randomSymbol();r2.innerText=randomSymbol();r3.innerText=randomSymbol();
+counter++;
+if(counter>=25){
+clearInterval(animation);
+let a=randomSymbol(),b=randomSymbol(),c=randomSymbol();
+r1.innerText=a;r2.innerText=b;r3.innerText=c;
+let win=0;
+if(a===b&&b===c){win=betValue*10;statusBox.className="status jackpot";statusBox.innerText="🎰 JACKPOT +"+win.toFixed(2)+"$";}
+else if(a===b||b===c||a===c){win=betValue*2;statusBox.className="status win";statusBox.innerText="✅ Gewonnen +"+win.toFixed(2)+"$";}
+else{statusBox.className="status lose";statusBox.innerText="❌ Verloren";}
+money+=win;updateMoney();spinsLeft--;
+if(spinsLeft>0){setTimeout(runSpin,400);}else{animating=false;}
+}},50);
+}
+</script>
+<script>
+if("serviceWorker" in navigator){navigator.serviceWorker.register("./sw.js");}
+</script>
+</body>
+</html>
