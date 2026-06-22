@@ -145,6 +145,46 @@ input {
     display: none;
 }
 
+#btnReset {
+    background: #222;
+    color: white;
+    border: 1px solid #444;
+    padding: 12px 15px;
+    font-size: 16px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: 0.2s;
+    user-select: none;
+    display: inline-block;
+    box-sizing: border-box;
+}
+
+#btnReset:hover {
+    background: #400000;
+    color: #ffcccc;
+    border-color: #ff0000;
+}
+
+#btnRefresh {
+    background: #222;
+    color: white;
+    border: 1px solid #444;
+    padding: 12px 15px;
+    font-size: 16px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: 0.2s;
+    user-select: none;
+    display: inline-block;
+    box-sizing: border-box;
+}
+
+#btnRefresh:hover {
+    background: #3a3300;
+    border-color: #ffd400;
+    color: #faefb8;
+}
+
 </style>
 </head>
 
@@ -163,6 +203,8 @@ input {
     </div>
 
     <div class="right">
+
+        <button id="btnReset">🗑 Reset (Cache leeren)</button>
 
         <div class="save-buttons">
         <button id="btnExport">💾 Export Save</button>
@@ -252,6 +294,8 @@ const symbols = ["🍒","🍋","⭐","🔔","7️⃣","💎","🍀"];
 
 let money = 10;
 
+let savingLocked = false;
+
 const savedMoney = localStorage.getItem("money");
 
 if (savedMoney !== null) {
@@ -305,6 +349,8 @@ function spinReel(reel, duration) {
 }
 
 async function startSpin() {
+    updateUIState();
+
     if (spinning) return;
 
     let bet = parseFloat(document.getElementById("bet").value);
@@ -313,17 +359,18 @@ async function startSpin() {
     if (isNaN(bet) || isNaN(spins)) return;
 
     if (bet <= 0 || spins <= 0) {
-    statusBox.innerText = "Ungültige Eingabe!";
-    return;
-}
+        statusBox.innerText = "Ungültige Eingabe!";
+        return;
+    }
 
     if (money < bet) {
-    statusBox.innerText = "Kein Geld mehr!";
-    return;
-}
+        statusBox.innerText = "Kein Geld mehr!";
+        return;
+    }
 
     spinning = true;
-    localStorage.setItem("spinReload", "true");
+    savingLocked = true;
+    updateUIState();
 
     const lever = document.getElementById("lever");
     lever.classList.add("lever-pulled");
@@ -331,11 +378,11 @@ async function startSpin() {
 
     for (let i = 0; i < spins; i++) {
 
-    if (money < bet) {
-        statusBox.className = "status lose";
-        statusBox.innerText = "Nicht genug Geld für weitere Spins!";
-        break;
-    }
+        if (money < bet) {
+            statusBox.className = "status lose";
+            statusBox.innerText = "Nicht genug Geld für weitere Spins!";
+            break;
+        }
 
         money -= bet;
         updateMoney();
@@ -346,15 +393,17 @@ async function startSpin() {
         const b = await spinReel(r2, 1800);
         const c = await spinReel(r3, 2200);
 
-    if (forceLose) {
-        forceLose = false;
+        if (forceLose) {
+            forceLose = false;
 
-        statusBox.className = "status lose";
-        statusBox.innerText = "❌ Verloren";
+            statusBox.className = "status lose";
+            statusBox.innerText = "❌ Verloren";
 
-        spinning = false;
-        return;
-    }
+            spinning = false;
+            savingLocked = false;
+            updateUIState();
+            return;
+        }
 
         let win = 0;
 
@@ -380,6 +429,8 @@ async function startSpin() {
     }
 
     spinning = false;
+    savingLocked = false; // 🔓 Save wieder frei
+    updateUIState();
 }
 
 document.getElementById("lever").addEventListener("click", startSpin);
@@ -421,8 +472,18 @@ if ("serviceWorker" in navigator) {
 document.getElementById("btnExport").addEventListener("click", exportSave);
 
 document.getElementById("importFile").addEventListener("change", async (e) => {
+    if (spinning || savingLocked) {
+        alert("Bitte warte bis der Spin fertig ist!");
+        return;
+    }
+
+    savingLocked = true;
+
     const file = e.target.files[0];
-    if (!file) return;
+    if (!file) {
+        savingLocked = false;
+        return;
+    }
 
     const text = await file.text();
     const raw = JSON.parse(text);
@@ -431,7 +492,8 @@ document.getElementById("importFile").addEventListener("change", async (e) => {
     const hash = await sha256(json);
 
     if (hash !== raw.hash) {
-        alert("❌ Save wurde verändert oder ist kaputt!");
+        alert("❌ Save manipuliert!");
+        savingLocked = false;
         return;
     }
 
@@ -440,12 +502,48 @@ document.getElementById("importFile").addEventListener("change", async (e) => {
     money = saveData.money;
     updateMoney();
 
-    
-
     alert("✔ Save geladen!");
+
+    savingLocked = false;
+});
+
+function updateUIState() {
+    const locked = spinning || savingLocked;
+
+    document.getElementById("btnExport").disabled = locked;
+    document.getElementById("importFile").disabled = locked;
+}
+
+document.getElementById("btnReset").addEventListener("click", () => {
+
+    const confirm1 = confirm(
+        "⚠️ ACHTUNG! ⚠️\n\n"
+        + "Cache inhalt größe: " + (localStorage.length * 2) + " KB\n\n" +
+        "Du bist dabei ALLE lokalen Daten zu löschen.\n\n" +
+        "👉 Es wird empfohlen vorher deinen Save zu exportieren!"
+    );
+
+    if (!confirm1) return;
+
+    const confirm2 = confirm(
+        "Bist du WIRKLICH sicher?\n\n" +
+        "Diese Aktion kann nicht rückgängig gemacht werden!"
+    );
+
+    if (!confirm2) return;
+
+    // 🔥 alles löschen
+    localStorage.clear();
+
+    money = 10;
+    updateMoney();
+
+    statusBox.className = "status lose";
+    statusBox.innerText = "🗑 Daten zurückgesetzt!";
+
+    alert("Cache gelöscht!");
 });
 </script>
 
 </body>
 </html>
-
