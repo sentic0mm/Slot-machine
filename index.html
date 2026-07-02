@@ -618,6 +618,30 @@ body.mp-active .save-buttons {
     font-size: 14px;
 }
 
+.screen textarea {
+    background: #111;
+    color: white;
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 16px;
+    width: 100%;
+    box-sizing: border-box;
+    font-family: Arial, sans-serif;
+    resize: vertical;
+}
+
+.req-note {
+    color: #aaa;
+    font-size: 15px;
+    margin-bottom: 15px;
+}
+
+#screenRequest select, #screenRequest input {
+    width: 100%;
+    margin-top: 5px;
+}
+
 /* Eingeloggter Account: dezent unten rechts, grau statt weiß */
 #accountTag {
     position: fixed;
@@ -696,6 +720,34 @@ body.mp-active .save-buttons {
     </div>
 
     <div id="menuStatus" class="menu-status"></div>
+</div>
+
+<!-- =============== ÄNDERUNG BEANTRAGEN =============== -->
+<div id="screenRequest" class="screen" hidden>
+    <h2>✉️ Änderung beantragen</h2>
+
+    <div class="req-note">
+        Dein Antrag geht direkt an den Betreiber und wird nach Prüfung
+        umgesetzt. (Alternativ per Mail: sentic0mm.support@gmail.com)
+    </div>
+
+    <label>Was soll geändert werden?</label>
+    <select id="reqType">
+        <option value="name">Namensänderung</option>
+        <option value="passwort">Passwort zurücksetzen</option>
+        <option value="beides">Name + Passwort</option>
+    </select>
+
+    <label id="reqNewNameLabel">Neuer Wunschname</label>
+    <input id="reqNewName" maxlength="16" placeholder="neuer_name">
+
+    <label>Beweis, dass der Account dir gehört / Nachricht</label>
+    <textarea id="reqProof" maxlength="500" rows="4" placeholder="z.B. wann du den Account erstellt hast, Mitspieler als Zeugen, …"></textarea>
+
+    <button id="btnReqSend" class="menu-btn primary">📨 Antrag abschicken</button>
+    <button id="btnReqBack" class="menu-btn">← Zurück</button>
+
+    <div id="reqStatus" class="menu-status"></div>
 </div>
 
 <!-- =============== ÖFFENTLICHE LOBBYS =============== -->
@@ -1314,7 +1366,7 @@ const elMpTimer = document.getElementById("mpTimer");
 // ---------- Screens umschalten ----------
 
 function showScreen(id) {
-    for (const s of ["screenLogin", "screenMenu", "screenBrowser", "screenLobby", "screenResults", "screenGame"]) {
+    for (const s of ["screenLogin", "screenMenu", "screenRequest", "screenBrowser", "screenLobby", "screenResults", "screenGame"]) {
         document.getElementById(s).hidden = (s !== id);
     }
 }
@@ -1329,12 +1381,11 @@ function setMenuStatus(text) {
 // Der Name wird unter /handles/<name> reserviert, damit er einmalig
 // ist. Passwörter werden NUR als SHA-256-Hash gespeichert.
 // Name und Passwort können vom Spiel aus absichtlich NICHT geändert
-// werden – dafür gibt es den Änderungsantrag per E-Mail an den
-// Betreiber, der es nach Prüfung in der Firebase-Konsole anpasst.
+// werden – dafür gibt es das Antrags-Formular im Spiel. Der Antrag
+// landet unter /requests in der Datenbank, der Betreiber prüft ihn
+// in der Firebase-Konsole und passt den Account dort an.
 // (Passwort-Reset: Betreiber löscht das Feld "passHash" beim User,
 // danach wird das nächste eingegebene Passwort das neue.)
-
-const MP_SUPPORT_MAIL = "sentic0mm.support@gmail.com";
 
 let account = null; // { uid, handle }
 try { account = JSON.parse(localStorage.getItem("account") || "null"); } catch (e) {}
@@ -1484,21 +1535,80 @@ document.getElementById("btnLogout").addEventListener("click", () => {
     showScreen("screenLogin");
 });
 
-// Öffnet eine vorausgefüllte E-Mail an den Support
+// ---------- Änderungsantrag (Formular im Spiel, keine Weiterleitung) ----------
+
 document.getElementById("btnChangeRequest").addEventListener("click", () => {
     if (!account) return;
-    const subject = encodeURIComponent("Änderungsantrag Account " + account.uid + " (@" + account.handle + ")");
-    const body = encodeURIComponent(
-        "Hallo,\n\n" +
-        "ich beantrage eine Änderung für meinen Slot-Machine-Account:\n\n" +
-        "User-ID: " + account.uid + "\n" +
-        "Aktueller Name: @" + account.handle + "\n\n" +
-        "Was soll geändert werden (Name / Passwort): \n" +
-        "Neuer Wunschname (bei Namensänderung): \n\n" +
-        "Beweis, dass der Account mir gehört: \n\n" +
-        "Danke!"
-    );
-    window.location.href = "mailto:" + MP_SUPPORT_MAIL + "?subject=" + subject + "&body=" + body;
+    document.getElementById("reqType").value = "name";
+    document.getElementById("reqNewName").value = "";
+    document.getElementById("reqProof").value = "";
+    document.getElementById("reqStatus").innerText = "";
+    document.getElementById("btnReqSend").disabled = false;
+    reqUpdateVisibility();
+    showScreen("screenRequest");
+});
+
+// Wunschname-Feld nur zeigen, wenn der Name geändert werden soll
+function reqUpdateVisibility() {
+    const type = document.getElementById("reqType").value;
+    const showName = type !== "passwort";
+    document.getElementById("reqNewName").hidden = !showName;
+    document.getElementById("reqNewNameLabel").hidden = !showName;
+}
+
+document.getElementById("reqType").addEventListener("change", reqUpdateVisibility);
+
+document.getElementById("btnReqBack").addEventListener("click", () => {
+    showScreen("screenMenu");
+    setMenuStatus("");
+});
+
+document.getElementById("btnReqSend").addEventListener("click", async () => {
+    if (!account || !fdb) return;
+
+    const type = document.getElementById("reqType").value;
+    const newName = document.getElementById("reqNewName").value.trim().replace(/^@/, "");
+    const proof = document.getElementById("reqProof").value.trim();
+    const status = document.getElementById("reqStatus");
+    const btn = document.getElementById("btnReqSend");
+
+    if (type !== "passwort") {
+        if (!/^[A-Za-z0-9_]{3,16}$/.test(newName)) {
+            status.innerText = "❌ Wunschname: 3–16 Zeichen, nur Buchstaben, Zahlen und _";
+            return;
+        }
+        try {
+            const taken = (await fdb.ref("handles/" + newName.toLowerCase()).get()).val();
+            if (taken && taken !== account.uid) {
+                status.innerText = "❌ @" + newName + " ist schon vergeben – wähl einen anderen!";
+                return;
+            }
+        } catch (e) {}
+    }
+
+    if (!proof) {
+        status.innerText = "❌ Bitte schreib einen Beweis / eine Nachricht dazu!";
+        return;
+    }
+
+    btn.disabled = true;
+    status.innerText = "📨 Wird geschickt…";
+
+    try {
+        await fdb.ref("requests").push({
+            uid: account.uid,
+            handle: account.handle,
+            type: type,
+            newName: type === "passwort" ? null : newName,
+            proof: proof,
+            createdAt: mpNow(),
+            status: "offen"
+        });
+        status.innerText = "✅ Antrag abgeschickt! Der Betreiber prüft ihn und meldet sich / ändert es nach einiger Zeit.";
+    } catch (err) {
+        btn.disabled = false;
+        status.innerText = mpFriendlyError(err);
+    }
 });
 
 function accUpdateMenu() {
