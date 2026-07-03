@@ -706,7 +706,8 @@ body.mp-active .save-buttons {
     <div id="accountBox">
         <div id="accountInfo"></div>
         <button id="btnGoLogin" class="menu-btn small primary" hidden>🔑 Einloggen / Registrieren</button>
-        <button id="btnChangeRequest" class="menu-btn small" hidden>✉️ Namens- / Passwortänderung beantragen</button>
+        <button id="btnNick" class="menu-btn small" hidden>✏️ Anzeigename ändern</button>
+        <button id="btnChangeRequest" class="menu-btn small" hidden>✉️ @Name- / Passwortänderung beantragen</button>
         <button id="btnLogout" class="menu-btn small" hidden>🚪 Ausloggen</button>
     </div>
 
@@ -720,6 +721,25 @@ body.mp-active .save-buttons {
     </div>
 
     <div id="menuStatus" class="menu-status"></div>
+</div>
+
+<!-- =============== ANZEIGENAME ÄNDERN =============== -->
+<div id="screenNick" class="screen" hidden>
+    <h2>✏️ Anzeigename ändern</h2>
+
+    <div class="req-note">
+        Dein @Name (zum Einloggen) bleibt gleich – das hier ist nur der
+        Name, den die anderen im Spiel sehen. Feld leer lassen und
+        speichern = wieder deinen @Namen anzeigen.
+    </div>
+
+    <label>Neuer Anzeigename</label>
+    <input id="nickInput" maxlength="16" placeholder="z.B. DerZocker">
+
+    <button id="btnNickSave" class="menu-btn primary">💾 Speichern</button>
+    <button id="btnNickBack" class="menu-btn">← Zurück</button>
+
+    <div id="nickStatus" class="menu-status"></div>
 </div>
 
 <!-- =============== ÄNDERUNG BEANTRAGEN =============== -->
@@ -1366,7 +1386,7 @@ const elMpTimer = document.getElementById("mpTimer");
 // ---------- Screens umschalten ----------
 
 function showScreen(id) {
-    for (const s of ["screenLogin", "screenMenu", "screenRequest", "screenBrowser", "screenLobby", "screenResults", "screenGame"]) {
+    for (const s of ["screenLogin", "screenMenu", "screenNick", "screenRequest", "screenBrowser", "screenLobby", "screenResults", "screenGame"]) {
         document.getElementById(s).hidden = (s !== id);
     }
 }
@@ -1474,7 +1494,7 @@ async function accLogin(handle, pass) {
         if (pass.length < 4) { accStatus("❌ Neues Passwort: mindestens 4 Zeichen!"); return; }
         const passHash = await accPassHash(uid, pass);
         await fdb.ref("users/" + uid).update({ passHash: passHash });
-        accLoggedIn(uid, user.handle);
+        accLoggedIn(uid, user.handle, user.nick);
         setMenuStatus("🔓 Passwort war zurückgesetzt – dein eingegebenes ist jetzt das neue!");
         return;
     }
@@ -1482,11 +1502,11 @@ async function accLogin(handle, pass) {
     const passHash = await accPassHash(uid, pass);
     if (passHash !== user.passHash) { accStatus("❌ Falsches Passwort!"); return; }
 
-    accLoggedIn(uid, user.handle);
+    accLoggedIn(uid, user.handle, user.nick);
 }
 
-function accLoggedIn(uid, handle) {
-    account = { uid: uid, handle: handle };
+function accLoggedIn(uid, handle, nick) {
+    account = { uid: uid, handle: handle, nick: nick || null };
     localStorage.setItem("account", JSON.stringify(account));
     localStorage.removeItem("guestMode");
     elAccPass.value = "";
@@ -1619,7 +1639,9 @@ function accUpdateMenu() {
         // Name & ID stehen dezent unten rechts, nicht groß im Menü
         info.hidden = true;
         tag.hidden = false;
-        tag.innerText = "👤 @" + account.handle + " · " + account.uid;
+        tag.innerText = account.nick
+            ? "👤 " + account.nick + " (@" + account.handle + ") · " + account.uid
+            : "👤 @" + account.handle + " · " + account.uid;
     } else {
         info.hidden = false;
         info.innerText = "🎭 Du spielst als Gast – Multiplayer braucht einen Account.";
@@ -1627,6 +1649,7 @@ function accUpdateMenu() {
     }
 
     document.getElementById("btnGoLogin").hidden = !!account;
+    document.getElementById("btnNick").hidden = !account;
     document.getElementById("btnChangeRequest").hidden = !account;
     document.getElementById("btnLogout").hidden = !account;
 }
@@ -1640,8 +1663,9 @@ if (account && fdb) {
             account = null;
             localStorage.removeItem("account");
             accUpdateMenu();
-        } else if (user.handle !== account.handle) {
+        } else if (user.handle !== account.handle || (user.nick || null) !== (account.nick || null)) {
             account.handle = user.handle;
+            account.nick = user.nick || null;
             localStorage.setItem("account", JSON.stringify(account));
             accUpdateMenu();
         }
@@ -1649,8 +1673,55 @@ if (account && fdb) {
 }
 
 function mpGetName() {
-    return account ? "@" + account.handle : "Gast";
+    if (!account) return "Gast";
+    // Nickname ohne @, echter Accountname mit @ (so kann niemand
+    // einen echten @Namen als Nickname faken)
+    return account.nick ? account.nick : "@" + account.handle;
 }
+
+// ---------- Anzeigename (Nickname) ändern ----------
+
+document.getElementById("btnNick").addEventListener("click", () => {
+    if (!account) return;
+    document.getElementById("nickInput").value = account.nick || "";
+    document.getElementById("nickStatus").innerText = "";
+    showScreen("screenNick");
+});
+
+document.getElementById("btnNickBack").addEventListener("click", () => {
+    showScreen("screenMenu");
+    setMenuStatus("");
+});
+
+document.getElementById("btnNickSave").addEventListener("click", async () => {
+    if (!account || !fdb) return;
+    const status = document.getElementById("nickStatus");
+    let nick = document.getElementById("nickInput").value.trim();
+
+    if (nick && !/^[A-Za-z0-9_ ]{3,16}$/.test(nick)) {
+        status.innerText = "❌ 3–16 Zeichen, nur Buchstaben, Zahlen, _ und Leerzeichen";
+        return;
+    }
+    // Nickname identisch mit dem eigenen @Namen? Dann einfach entfernen.
+    if (nick.toLowerCase() === account.handle.toLowerCase()) nick = "";
+
+    status.innerText = "💾 Speichere…";
+    try {
+        await fdb.ref("users/" + account.uid + "/nick").set(nick || null);
+        account.nick = nick || null;
+        localStorage.setItem("account", JSON.stringify(account));
+        accUpdateMenu();
+        status.innerText = nick
+            ? '✅ Gespeichert! Du heißt jetzt "' + nick + '".'
+            : "✅ Anzeigename entfernt – du heißt wieder @" + account.handle + ".";
+    } catch (err) {
+        status.innerText = mpFriendlyError(err);
+    }
+});
+
+document.getElementById("nickInput").addEventListener("keydown", e => {
+    if (e.key === "Enter") document.getElementById("btnNickSave").click();
+});
 
 function mpRequireAccount(statusFn) {
     if (account) return true;
