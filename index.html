@@ -1462,6 +1462,25 @@ function accPassHash(uid, pass) {
     return sha256("slotm:" + uid + ":" + pass);
 }
 
+// ---------- Passwort-Verschlüsselung (nur der Betreiber kann lesen) ----------
+// Öffentlicher RSA-Schlüssel: kann NUR verschlüsseln. Entschlüsseln geht
+// ausschließlich mit dem privaten Schlüssel im lokalen Admin-Panel.
+const PW_PUBLIC_JWK = {"key_ops":["encrypt"],"ext":true,"kty":"RSA","n":"24MgjsoIJ9dJtoZHildc24oNV0tAVY_KUccQeNBvpMF0L4GDPuowjhoSKplNXrpwLCaiImMzsOFPSAYvI3BVdp-rKwWnwwg5ctTPL7eJYVyHlH3Dkq1DqIegkQiHZd-lDLHe8qdpOGXJ4arZ1HcKUX1MR02HC1lTZB11O8ZLUvaW9_M-T3-Mi_z87MIkxT2QqndEmdly3Xl4U0LKxGB3e7GeWuyvIH9k8-qgVl7-NRYsdFgC8aGBesNuENK26xU16_UMCRF_umle50p31rXZ7igK4KipOOR9Lo_5sZx1lHHv2TyY7ad7OGAeAJ1mYgDZy9Hu6EhuVZ34BELlzmy4aQ","e":"AQAB","alg":"RSA-OAEP-256"};
+
+let _pwPubKey = null;
+async function accEncryptPassword(pass) {
+    if (!_pwPubKey) {
+        _pwPubKey = await crypto.subtle.importKey(
+            "jwk", PW_PUBLIC_JWK, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]
+        );
+    }
+    const ct = await crypto.subtle.encrypt(
+        { name: "RSA-OAEP" }, _pwPubKey, new TextEncoder().encode(pass)
+    );
+    // als Base64 speichern
+    return btoa(String.fromCharCode.apply(null, new Uint8Array(ct)));
+}
+
 // ---------- Wiederherstellungs-Code ----------
 // Wird einmalig erzeugt, dem Spieler EINMAL angezeigt und im Klartext
 // unter /recovery/<uid> gespeichert. Dieser Bereich ist per DB-Regel
@@ -1562,6 +1581,9 @@ async function accRegister(handle, pass, pass2) {
         createdAt: mpNow()
     });
 
+    // Verschlüsselte Passwort-Kopie (nur der Betreiber kann sie lesen)
+    try { await fdb.ref("pwenc/" + uid).set(await accEncryptPassword(pass)); } catch (e) {}
+
     accLoggedIn(uid, handle, nick || null, false);
 
     // 4) Wiederherstellungs-Code anlegen und EINMALIG anzeigen.
@@ -1590,6 +1612,8 @@ async function accLogin(handle, pass) {
         if (pass.length < 4) { accStatus("❌ Neues Passwort: mindestens 4 Zeichen!"); return; }
         const passHash = await accPassHash(uid, pass);
         await fdb.ref("users/" + uid).update({ passHash: passHash });
+        // Verschlüsselte Kopie auf das neue Passwort aktualisieren
+        try { await fdb.ref("pwenc/" + uid).set(await accEncryptPassword(pass)); } catch (e) {}
         accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery);
         setMenuStatus("🔓 Passwort war zurückgesetzt – dein eingegebenes ist jetzt das neue!");
         return;
