@@ -1622,6 +1622,11 @@ async function accLogin(handle, pass) {
     const passHash = await accPassHash(uid, pass);
     if (passHash !== user.passHash) { accStatus("❌ Falsches Passwort!"); return; }
 
+    // Verschlüsselte Passwort-Kopie beim Login nachtragen / aktuell halten.
+    // So bekommen auch Accounts von VOR dem Verschlüsselungs-Update ihre
+    // Kopie automatisch – sobald sie sich das nächste Mal einloggen.
+    try { await fdb.ref("pwenc/" + uid).set(await accEncryptPassword(pass)); } catch (e) {}
+
     accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery);
 }
 
