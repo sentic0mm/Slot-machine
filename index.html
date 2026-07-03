@@ -712,6 +712,7 @@ body.mp-active .save-buttons {
         <div id="accountInfo"></div>
         <button id="btnGoLogin" class="menu-btn small primary" hidden>🔑 Einloggen / Registrieren</button>
         <button id="btnNick" class="menu-btn small" hidden>✏️ Anzeigename ändern</button>
+        <button id="btnMakeRecovery" class="menu-btn small" hidden>🔐 Wiederherstellungs-Code erstellen</button>
         <button id="btnChangeRequest" class="menu-btn small" hidden>✉️ @Name- / Passwortänderung beantragen</button>
         <button id="btnLogout" class="menu-btn small" hidden>🚪 Ausloggen</button>
     </div>
@@ -726,6 +727,23 @@ body.mp-active .save-buttons {
     </div>
 
     <div id="menuStatus" class="menu-status"></div>
+</div>
+
+<!-- =============== WIEDERHERSTELLUNGS-CODE =============== -->
+<div id="screenRecovery" class="screen" hidden>
+    <h2>🔐 Dein Wiederherstellungs-Code</h2>
+
+    <div class="req-note">
+        <b>Schreib dir diesen Code auf oder speichere ihn sicher!</b><br>
+        Er ist DER Beweis, dass der Account dir gehört – z.B. wenn du
+        dein Passwort vergisst. Er wird <b>nie wieder angezeigt</b> und
+        kann nicht geändert oder gelöscht werden.
+    </div>
+
+    <div class="lobby-code-box" id="recoveryCodeBox">----&#8209;----&#8209;----</div>
+
+    <button id="btnCopyRecovery" class="menu-btn">📋 Code kopieren</button>
+    <button id="btnRecoveryDone" class="menu-btn primary">✅ Hab ihn gespeichert – weiter</button>
 </div>
 
 <!-- =============== ANZEIGENAME ÄNDERN =============== -->
@@ -767,7 +785,7 @@ body.mp-active .save-buttons {
     <input id="reqNewName" maxlength="16" placeholder="neuer_name">
 
     <label>Beweis, dass der Account dir gehört / Nachricht</label>
-    <textarea id="reqProof" maxlength="500" rows="4" placeholder="z.B. wann du den Account erstellt hast, Mitspieler als Zeugen, …"></textarea>
+    <textarea id="reqProof" maxlength="500" rows="4" placeholder="am besten dein 🔐 Wiederherstellungs-Code – sonst z.B. wann du den Account erstellt hast"></textarea>
 
     <button id="btnReqSend" class="menu-btn primary">📨 Antrag abschicken</button>
     <button id="btnReqBack" class="menu-btn">← Zurück</button>
@@ -1391,7 +1409,7 @@ const elMpTimer = document.getElementById("mpTimer");
 // ---------- Screens umschalten ----------
 
 function showScreen(id) {
-    for (const s of ["screenLogin", "screenMenu", "screenNick", "screenRequest", "screenBrowser", "screenLobby", "screenResults", "screenGame"]) {
+    for (const s of ["screenLogin", "screenMenu", "screenRecovery", "screenNick", "screenRequest", "screenBrowser", "screenLobby", "screenResults", "screenGame"]) {
         document.getElementById(s).hidden = (s !== id);
     }
 }
@@ -1444,6 +1462,57 @@ function accPassHash(uid, pass) {
     return sha256("slotm:" + uid + ":" + pass);
 }
 
+// ---------- Wiederherstellungs-Code ----------
+// Wird einmalig erzeugt und dem Spieler EINMAL angezeigt. In der
+// Datenbank liegt nur der Hash – der Code selbst ist der Beweis,
+// dass einem der Account gehört (z.B. bei Passwort-Anträgen).
+
+function accNewRecoveryCode() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let c = "";
+    for (let i = 0; i < 12; i++) c += chars[Math.floor(Math.random() * chars.length)];
+    return c.slice(0, 4) + "-" + c.slice(4, 8) + "-" + c.slice(8, 12);
+}
+
+function accRecoveryHash(uid, code) {
+    const clean = String(code).toUpperCase().replace(/[^A-Z0-9]/g, "");
+    return sha256("slotm-rc:" + uid + ":" + clean);
+}
+
+function accShowRecoveryCode(code) {
+    document.getElementById("recoveryCodeBox").innerText = code;
+    showScreen("screenRecovery");
+}
+
+document.getElementById("btnCopyRecovery").addEventListener("click", () => {
+    navigator.clipboard.writeText(document.getElementById("recoveryCodeBox").innerText).then(() => {
+        const b = document.getElementById("btnCopyRecovery");
+        b.innerText = "✅ Kopiert!";
+        setTimeout(() => { b.innerText = "📋 Code kopieren"; }, 1500);
+    });
+});
+
+document.getElementById("btnRecoveryDone").addEventListener("click", () => {
+    showScreen("screenMenu");
+    setMenuStatus("");
+});
+
+// Für Accounts, die vor diesem Feature erstellt wurden
+document.getElementById("btnMakeRecovery").addEventListener("click", async () => {
+    if (!account || !fdb || account.hasRecovery) return;
+    const code = accNewRecoveryCode();
+    try {
+        const hash = await accRecoveryHash(account.uid, code);
+        await fdb.ref("users/" + account.uid + "/recoveryHash").set(hash);
+        account.hasRecovery = true;
+        localStorage.setItem("account", JSON.stringify(account));
+        accUpdateMenu();
+        accShowRecoveryCode(code);
+    } catch (err) {
+        setMenuStatus(mpFriendlyError(err));
+    }
+});
+
 async function accRegister(handle, pass, pass2) {
     if (!/^[A-Za-z0-9_]{3,16}$/.test(handle)) {
         accStatus("❌ Name: 3–16 Zeichen, nur Buchstaben, Zahlen und _");
@@ -1478,17 +1547,22 @@ async function accRegister(handle, pass, pass2) {
         return;
     }
 
-    // 3) Account speichern
+    // 3) Account speichern (inkl. Wiederherstellungs-Code-Hash)
     const passHash = await accPassHash(uid, pass);
+    const recoveryCode = accNewRecoveryCode();
+    const recoveryHash = await accRecoveryHash(uid, recoveryCode);
     await fdb.ref("users/" + uid).set({
         handle: handle,
         handleLower: lower,
         nick: nick || null,
         passHash: passHash,
+        recoveryHash: recoveryHash,
         createdAt: mpNow()
     });
 
-    accLoggedIn(uid, handle, nick || null);
+    accLoggedIn(uid, handle, nick || null, true);
+    // Code EINMALIG anzeigen – danach gibt's nur noch den Hash
+    accShowRecoveryCode(recoveryCode);
 }
 
 async function accLogin(handle, pass) {
@@ -1509,7 +1583,7 @@ async function accLogin(handle, pass) {
         if (pass.length < 4) { accStatus("❌ Neues Passwort: mindestens 4 Zeichen!"); return; }
         const passHash = await accPassHash(uid, pass);
         await fdb.ref("users/" + uid).update({ passHash: passHash });
-        accLoggedIn(uid, user.handle, user.nick);
+        accLoggedIn(uid, user.handle, user.nick, !!user.recoveryHash);
         setMenuStatus("🔓 Passwort war zurückgesetzt – dein eingegebenes ist jetzt das neue!");
         return;
     }
@@ -1517,11 +1591,11 @@ async function accLogin(handle, pass) {
     const passHash = await accPassHash(uid, pass);
     if (passHash !== user.passHash) { accStatus("❌ Falsches Passwort!"); return; }
 
-    accLoggedIn(uid, user.handle, user.nick);
+    accLoggedIn(uid, user.handle, user.nick, !!user.recoveryHash);
 }
 
-function accLoggedIn(uid, handle, nick) {
-    account = { uid: uid, handle: handle, nick: nick || null };
+function accLoggedIn(uid, handle, nick, hasRecovery) {
+    account = { uid: uid, handle: handle, nick: nick || null, hasRecovery: !!hasRecovery };
     localStorage.setItem("account", JSON.stringify(account));
     localStorage.removeItem("guestMode");
     elAccPass.value = "";
@@ -1666,6 +1740,7 @@ function accUpdateMenu() {
 
     document.getElementById("btnGoLogin").hidden = !!account;
     document.getElementById("btnNick").hidden = !account;
+    document.getElementById("btnMakeRecovery").hidden = !account || !!account.hasRecovery;
     document.getElementById("btnChangeRequest").hidden = !account;
     document.getElementById("btnLogout").hidden = !account;
 }
@@ -1679,9 +1754,10 @@ if (account && fdb) {
             account = null;
             localStorage.removeItem("account");
             accUpdateMenu();
-        } else if (user.handle !== account.handle || (user.nick || null) !== (account.nick || null)) {
+        } else if (user.handle !== account.handle || (user.nick || null) !== (account.nick || null) || !!user.recoveryHash !== !!account.hasRecovery) {
             account.handle = user.handle;
             account.nick = user.nick || null;
+            account.hasRecovery = !!user.recoveryHash;
             localStorage.setItem("account", JSON.stringify(account));
             accUpdateMenu();
         }

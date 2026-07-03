@@ -1,6 +1,6 @@
 // Cache-Version: bei jedem größeren Update hochzählen (v2 -> v3 ...).
 // Das erzwingt, dass alte Caches gelöscht werden.
-const CACHE = 'slots-v10';
+const CACHE = 'slots-v11';
 const ASSETS = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', e => {
