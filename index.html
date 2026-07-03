@@ -684,6 +684,11 @@ body.mp-active .save-buttons {
         <input id="accName" maxlength="16" placeholder="name">
     </div>
 
+    <div id="regNickWrap" hidden>
+        <label>Anzeigename (optional – kannst du später jederzeit ändern)</label>
+        <input id="accNick" maxlength="16" placeholder="Anzeigename">
+    </div>
+
     <label>Passwort</label>
     <input id="accPass" type="password" maxlength="64" placeholder="Passwort">
 
@@ -1426,6 +1431,7 @@ function accSetMode(mode) {
     document.getElementById("tabLogin").classList.toggle("active", mode === "login");
     document.getElementById("tabRegister").classList.toggle("active", mode === "register");
     document.getElementById("regExtra").hidden = (mode !== "register");
+    document.getElementById("regNickWrap").hidden = (mode !== "register");
     document.getElementById("btnAccSubmit").innerText =
         mode === "login" ? "🔑 Einloggen" : "✨ Account erstellen";
     accStatus("");
@@ -1445,6 +1451,14 @@ async function accRegister(handle, pass, pass2) {
     }
     if (pass.length < 4) { accStatus("❌ Passwort: mindestens 4 Zeichen!"); return; }
     if (pass !== pass2) { accStatus("❌ Die Passwörter stimmen nicht überein!"); return; }
+
+    // Optionaler Anzeigename direkt bei der Registrierung
+    let nick = document.getElementById("accNick").value.trim();
+    if (nick && !/^[A-Za-z0-9_ ]{3,16}$/.test(nick)) {
+        accStatus("❌ Anzeigename: 3–16 Zeichen, nur Buchstaben, Zahlen, _ und Leerzeichen");
+        return;
+    }
+    if (nick && nick.toLowerCase() === handle.toLowerCase()) nick = "";
 
     accStatus("✨ Account wird erstellt…");
 
@@ -1469,11 +1483,12 @@ async function accRegister(handle, pass, pass2) {
     await fdb.ref("users/" + uid).set({
         handle: handle,
         handleLower: lower,
+        nick: nick || null,
         passHash: passHash,
         createdAt: mpNow()
     });
 
-    accLoggedIn(uid, handle);
+    accLoggedIn(uid, handle, nick || null);
 }
 
 async function accLogin(handle, pass) {
@@ -1511,6 +1526,7 @@ function accLoggedIn(uid, handle, nick) {
     localStorage.removeItem("guestMode");
     elAccPass.value = "";
     elAccPass2.value = "";
+    document.getElementById("accNick").value = "";
     accStatus("");
     accUpdateMenu();
     showScreen("screenMenu");
@@ -1528,7 +1544,7 @@ document.getElementById("btnAccSubmit").addEventListener("click", async () => {
     }
 });
 
-for (const id of ["accName", "accPass", "accPass2"]) {
+for (const id of ["accName", "accNick", "accPass", "accPass2"]) {
     document.getElementById(id).addEventListener("keydown", e => {
         if (e.key === "Enter") document.getElementById("btnAccSubmit").click();
     });
