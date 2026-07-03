@@ -1463,9 +1463,11 @@ function accPassHash(uid, pass) {
 }
 
 // ---------- Wiederherstellungs-Code ----------
-// Wird einmalig erzeugt und dem Spieler EINMAL angezeigt. In der
-// Datenbank liegt nur der Hash – der Code selbst ist der Beweis,
-// dass einem der Account gehört (z.B. bei Passwort-Anträgen).
+// Wird einmalig erzeugt, dem Spieler EINMAL angezeigt und im Klartext
+// unter /recovery/<uid> gespeichert. Dieser Bereich ist per DB-Regel
+// für NIEMANDEN lesbar – nur der Betreiber sieht die Codes (Console/
+// Admin-Panel). Schreiben geht genau einmal, ändern/löschen kann ihn
+// vom Spiel aus niemand.
 
 function accNewRecoveryCode() {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -1474,9 +1476,17 @@ function accNewRecoveryCode() {
     return c.slice(0, 4) + "-" + c.slice(4, 8) + "-" + c.slice(8, 12);
 }
 
-function accRecoveryHash(uid, code) {
-    const clean = String(code).toUpperCase().replace(/[^A-Z0-9]/g, "");
-    return sha256("slotm-rc:" + uid + ":" + clean);
+// Legt den Code an und merkt am Account, dass er existiert
+async function accCreateRecovery(uid) {
+    const code = accNewRecoveryCode();
+    await fdb.ref("recovery/" + uid).set(code);
+    await fdb.ref("users/" + uid + "/hasRecovery").set(true);
+    if (account && account.uid === uid) {
+        account.hasRecovery = true;
+        localStorage.setItem("account", JSON.stringify(account));
+        accUpdateMenu();
+    }
+    return code;
 }
 
 function accShowRecoveryCode(code) {
@@ -1497,16 +1507,11 @@ document.getElementById("btnRecoveryDone").addEventListener("click", () => {
     setMenuStatus("");
 });
 
-// Für Accounts, die vor diesem Feature erstellt wurden
+// Für Accounts, die noch keinen Code haben
 document.getElementById("btnMakeRecovery").addEventListener("click", async () => {
     if (!account || !fdb || account.hasRecovery) return;
-    const code = accNewRecoveryCode();
     try {
-        const hash = await accRecoveryHash(account.uid, code);
-        await fdb.ref("users/" + account.uid + "/recoveryHash").set(hash);
-        account.hasRecovery = true;
-        localStorage.setItem("account", JSON.stringify(account));
-        accUpdateMenu();
+        const code = await accCreateRecovery(account.uid);
         accShowRecoveryCode(code);
     } catch (err) {
         setMenuStatus(mpFriendlyError(err));
@@ -1547,22 +1552,24 @@ async function accRegister(handle, pass, pass2) {
         return;
     }
 
-    // 3) Account speichern (inkl. Wiederherstellungs-Code-Hash)
+    // 3) Account speichern
     const passHash = await accPassHash(uid, pass);
-    const recoveryCode = accNewRecoveryCode();
-    const recoveryHash = await accRecoveryHash(uid, recoveryCode);
     await fdb.ref("users/" + uid).set({
         handle: handle,
         handleLower: lower,
         nick: nick || null,
         passHash: passHash,
-        recoveryHash: recoveryHash,
         createdAt: mpNow()
     });
 
-    accLoggedIn(uid, handle, nick || null, true);
-    // Code EINMALIG anzeigen – danach gibt's nur noch den Hash
-    accShowRecoveryCode(recoveryCode);
+    accLoggedIn(uid, handle, nick || null, false);
+
+    // 4) Wiederherstellungs-Code anlegen und EINMALIG anzeigen.
+    // Falls das schiefgeht, bleibt der Menü-Button dafür sichtbar.
+    try {
+        const recoveryCode = await accCreateRecovery(uid);
+        accShowRecoveryCode(recoveryCode);
+    } catch (e) {}
 }
 
 async function accLogin(handle, pass) {
@@ -1583,7 +1590,7 @@ async function accLogin(handle, pass) {
         if (pass.length < 4) { accStatus("❌ Neues Passwort: mindestens 4 Zeichen!"); return; }
         const passHash = await accPassHash(uid, pass);
         await fdb.ref("users/" + uid).update({ passHash: passHash });
-        accLoggedIn(uid, user.handle, user.nick, !!user.recoveryHash);
+        accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery);
         setMenuStatus("🔓 Passwort war zurückgesetzt – dein eingegebenes ist jetzt das neue!");
         return;
     }
@@ -1591,7 +1598,7 @@ async function accLogin(handle, pass) {
     const passHash = await accPassHash(uid, pass);
     if (passHash !== user.passHash) { accStatus("❌ Falsches Passwort!"); return; }
 
-    accLoggedIn(uid, user.handle, user.nick, !!user.recoveryHash);
+    accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery);
 }
 
 function accLoggedIn(uid, handle, nick, hasRecovery) {
@@ -1754,10 +1761,10 @@ if (account && fdb) {
             account = null;
             localStorage.removeItem("account");
             accUpdateMenu();
-        } else if (user.handle !== account.handle || (user.nick || null) !== (account.nick || null) || !!user.recoveryHash !== !!account.hasRecovery) {
+        } else if (user.handle !== account.handle || (user.nick || null) !== (account.nick || null) || !!user.hasRecovery !== !!account.hasRecovery) {
             account.handle = user.handle;
             account.nick = user.nick || null;
-            account.hasRecovery = !!user.recoveryHash;
+            account.hasRecovery = !!user.hasRecovery;
             localStorage.setItem("account", JSON.stringify(account));
             accUpdateMenu();
         }
