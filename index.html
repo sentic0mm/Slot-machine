@@ -779,6 +779,7 @@ body.mp-active .save-buttons {
         <option value="name">Namensänderung</option>
         <option value="passwort">Passwort zurücksetzen</option>
         <option value="beides">Name + Passwort</option>
+        <option value="custom">Sonstiges Anliegen</option>
     </select>
 
     <label id="reqNewNameLabel">Neuer Wunschname</label>
@@ -1697,7 +1698,7 @@ document.getElementById("btnChangeRequest").addEventListener("click", () => {
 // Wunschname-Feld nur zeigen, wenn der Name geändert werden soll
 function reqUpdateVisibility() {
     const type = document.getElementById("reqType").value;
-    const showName = type !== "passwort";
+    const showName = (type === "name" || type === "beides");
     document.getElementById("reqNewName").hidden = !showName;
     document.getElementById("reqNewNameLabel").hidden = !showName;
 }
@@ -1717,8 +1718,18 @@ document.getElementById("btnReqSend").addEventListener("click", async () => {
     const proof = document.getElementById("reqProof").value.trim();
     const status = document.getElementById("reqStatus");
     const btn = document.getElementById("btnReqSend");
+    const wantsName = (type === "name" || type === "beides");
 
-    if (type !== "passwort") {
+    // Spam-Schutz: hat der Betreiber Anträge für diesen Account gesperrt?
+    try {
+        const blocked = (await fdb.ref("blocked/" + account.uid).get()).val();
+        if (blocked === true) {
+            status.innerText = "🚫 Für deinen Account sind Anträge gesperrt. Bitte wende dich direkt an den Support.";
+            return;
+        }
+    } catch (e) {}
+
+    if (wantsName) {
         if (!/^[A-Za-z0-9_]{3,16}$/.test(newName)) {
             status.innerText = "❌ Wunschname: 3–16 Zeichen, nur Buchstaben, Zahlen und _";
             return;
@@ -1733,7 +1744,7 @@ document.getElementById("btnReqSend").addEventListener("click", async () => {
     }
 
     if (!proof) {
-        status.innerText = "❌ Bitte schreib einen Beweis / eine Nachricht dazu!";
+        status.innerText = "❌ Bitte schreib eine Nachricht / einen Beweis dazu!";
         return;
     }
 
@@ -1745,7 +1756,7 @@ document.getElementById("btnReqSend").addEventListener("click", async () => {
             uid: account.uid,
             handle: account.handle,
             type: type,
-            newName: type === "passwort" ? null : newName,
+            newName: wantsName ? newName : null,
             proof: proof,
             createdAt: mpNow(),
             status: "offen"
