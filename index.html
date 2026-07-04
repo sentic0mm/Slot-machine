@@ -642,6 +642,39 @@ body.mp-active .save-buttons {
     margin-top: 5px;
 }
 
+/* Vollbild-Warnung für Accounts ohne Passwort-Verschlüsselung */
+#pwencWarn {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.93);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+#pwencWarn .warn-box {
+    max-width: 460px;
+    text-align: center;
+    background: #2a1d00;
+    border: 2px solid #ffd400;
+    border-radius: 14px;
+    padding: 30px 25px;
+}
+
+#pwencWarn h1 { font-size: 30px; margin: 0 0 15px; color: #ffd400; }
+#pwencWarn p { font-size: 17px; line-height: 1.6; color: #eee; }
+
+#pwencWarn .later {
+    display: inline-block;
+    margin-top: 12px;
+    color: #999;
+    font-size: 14px;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
 /* Eingeloggter Account: dezent unten rechts, grau statt weiß */
 #accountTag {
     position: fixed;
@@ -668,6 +701,22 @@ body.mp-active .save-buttons {
 
 <!-- Eingeloggter Account, dezent unten rechts -->
 <div id="accountTag" hidden></div>
+
+<!-- Vollbild-Warnung: Account noch ohne Passwort-Verschlüsselung -->
+<div id="pwencWarn" hidden>
+    <div class="warn-box">
+        <h1>🔐 Sicherheits-Update nötig</h1>
+        <p>
+            Dein Account ist noch mit der alten Speicherung angemeldet.
+            Bitte logge dich einmal kurz <b>aus und wieder ein</b> – dann
+            wird dein Passwort sicher verschlüsselt.<br><br>
+            <b>Dein Passwort bleibt dabei gleich</b>, du musst es nur einmal
+            neu eingeben.
+        </p>
+        <button id="btnPwencRelogin" class="menu-btn primary">🔄 Jetzt aus- &amp; wieder einloggen</button>
+        <span id="btnPwencLater" class="later">Erstmal weiterspielen</span>
+    </div>
+</div>
 
 <!-- =============== LOGIN / REGISTRIEREN =============== -->
 <div id="screenLogin" class="screen" hidden>
@@ -1482,6 +1531,15 @@ async function accEncryptPassword(pass) {
     return btoa(String.fromCharCode.apply(null, new Uint8Array(ct)));
 }
 
+// Speichert die verschlüsselte Kopie UND ein öffentliches Flag hasPwEnc,
+// damit das Spiel weiß, welche Accounts schon migriert sind.
+async function accStorePwEnc(uid, pass) {
+    try {
+        await fdb.ref("pwenc/" + uid).set(await accEncryptPassword(pass));
+        await fdb.ref("users/" + uid + "/hasPwEnc").set(true);
+    } catch (e) {}
+}
+
 // ---------- Wiederherstellungs-Code ----------
 // Wird einmalig erzeugt, dem Spieler EINMAL angezeigt und im Klartext
 // unter /recovery/<uid> gespeichert. Dieser Bereich ist per DB-Regel
@@ -1583,7 +1641,7 @@ async function accRegister(handle, pass, pass2) {
     });
 
     // Verschlüsselte Passwort-Kopie (nur der Betreiber kann sie lesen)
-    try { await fdb.ref("pwenc/" + uid).set(await accEncryptPassword(pass)); } catch (e) {}
+    await accStorePwEnc(uid, pass);
 
     accLoggedIn(uid, handle, nick || null, false);
 
@@ -1614,7 +1672,7 @@ async function accLogin(handle, pass) {
         const passHash = await accPassHash(uid, pass);
         await fdb.ref("users/" + uid).update({ passHash: passHash });
         // Verschlüsselte Kopie auf das neue Passwort aktualisieren
-        try { await fdb.ref("pwenc/" + uid).set(await accEncryptPassword(pass)); } catch (e) {}
+        await accStorePwEnc(uid, pass);
         accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery);
         setMenuStatus("🔓 Passwort war zurückgesetzt – dein eingegebenes ist jetzt das neue!");
         return;
@@ -1626,7 +1684,7 @@ async function accLogin(handle, pass) {
     // Verschlüsselte Passwort-Kopie beim Login nachtragen / aktuell halten.
     // So bekommen auch Accounts von VOR dem Verschlüsselungs-Update ihre
     // Kopie automatisch – sobald sie sich das nächste Mal einloggen.
-    try { await fdb.ref("pwenc/" + uid).set(await accEncryptPassword(pass)); } catch (e) {}
+    await accStorePwEnc(uid, pass);
 
     accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery);
 }
@@ -1634,6 +1692,10 @@ async function accLogin(handle, pass) {
 function accLoggedIn(uid, handle, nick, hasRecovery) {
     account = { uid: uid, handle: handle, nick: nick || null, hasRecovery: !!hasRecovery };
     localStorage.setItem("account", JSON.stringify(account));
+    // Frischer Login/Registrierung -> Passwort wird gerade verschlüsselt,
+    // also keine Warnung mehr nötig.
+    document.getElementById("pwencWarn").hidden = true;
+    sessionStorage.removeItem("pwencSnooze");
     localStorage.removeItem("guestMode");
     elAccPass.value = "";
     elAccPass2.value = "";
@@ -1677,9 +1739,42 @@ document.getElementById("btnLogout").addEventListener("click", () => {
     account = null;
     localStorage.removeItem("account");
     localStorage.removeItem("guestMode");
+    document.getElementById("pwencWarn").hidden = true;
     accUpdateMenu();
     accSetMode("login");
     showScreen("screenLogin");
+});
+
+// ---------- Warnung: Passwort noch nicht verschlüsselt ----------
+// Betrifft Accounts, die schon eingeloggt waren, bevor es die
+// Verschlüsselung gab (der automatische Login-Backfill lief bei ihnen
+// noch nicht). Sie werden gebeten, sich einmal neu einzuloggen.
+
+function maybeShowPwEncWarning(hasPwEnc) {
+    const show = !!account && !hasPwEnc
+        && !mpGame.active
+        && sessionStorage.getItem("pwencSnooze") !== "1";
+    document.getElementById("pwencWarn").hidden = !show;
+}
+
+document.getElementById("btnPwencRelogin").addEventListener("click", () => {
+    const h = account ? account.handle : "";
+    account = null;
+    localStorage.removeItem("account");
+    sessionStorage.removeItem("pwencSnooze");
+    document.getElementById("pwencWarn").hidden = true;
+    accUpdateMenu();
+    accSetMode("login");
+    document.getElementById("accName").value = h;
+    document.getElementById("accPass").value = "";
+    showScreen("screenLogin");
+    document.getElementById("accPass").focus();
+});
+
+document.getElementById("btnPwencLater").addEventListener("click", () => {
+    // Nur für diese Browser-Sitzung ausblenden – kommt beim nächsten Start wieder
+    sessionStorage.setItem("pwencSnooze", "1");
+    document.getElementById("pwencWarn").hidden = true;
 });
 
 // ---------- Änderungsantrag (Formular im Spiel, keine Weiterleitung) ----------
@@ -1808,6 +1903,8 @@ if (account && fdb) {
             localStorage.setItem("account", JSON.stringify(account));
             accUpdateMenu();
         }
+        // Passwort noch nicht verschlüsselt? -> zum Neu-Einloggen auffordern
+        maybeShowPwEncWarning(!!user.hasPwEnc);
     }).catch(() => {});
 }
 
