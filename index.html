@@ -170,11 +170,16 @@ body {
     border-radius: 10px;
     cursor: pointer;
     transition: 0.2s;
-    margin-bottom: 12px;
+    margin-bottom: 5px;
 }
 
 #btnMode:hover { background: #333; }
-#btnMode.mega { background: #06351b; border-color: #00ff66; color: #b8ffd2; }
+
+#modeLabel {
+    font-size: 19px;
+    font-weight: bold;
+    margin-bottom: 14px;
+}
 
 .status {
     font-size: 28px;
@@ -984,7 +989,8 @@ body.mp-active .save-buttons {
         <label>🎰 Spielmodus</label>
         <select id="setMode">
             <option value="classic" selected>Klassisch (3 Walzen)</option>
-            <option value="mega">MEGA (5×3, schräg &amp; quer)</option>
+            <option value="mega">MultiGrid (5×3)</option>
+            <option value="ultra">UltraGrid (7×3)</option>
         </select>
 
         <div class="easy-row">
@@ -1040,7 +1046,8 @@ body.mp-active .save-buttons {
             </label>
     </div>
 
-        <button id="btnMode">🎰 Modus: Klassisch (3)</button>
+        <button id="btnMode">🔄 Modus wechseln</button>
+        <div id="modeLabel">Klassisch</div>
 
         <div id="winDisplay">💰 10.00$</div>
 
@@ -1110,9 +1117,14 @@ async function exportSave() {
     const blob = new Blob([JSON.stringify(packageData)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
 
+    const fileNames = {
+        classic: "slot-klassisch-save.json",
+        mega: "slot-multigrid-save.json",
+        ultra: "slot-ultragrid-save.json"
+    };
     const a = document.createElement("a");
     a.href = url;
-    a.download = gameMode === "mega" ? "slot-mega-save.json" : "slot-classic-save.json";
+    a.download = fileNames[gameMode] || "slot-save.json";
     a.click();
 
     URL.revokeObjectURL(url);
@@ -1120,7 +1132,8 @@ async function exportSave() {
 
 // Lädt einen geprüften Save in die passende Geldbörse und stellt den Modus um
 function applyImportedSave(saveData) {
-    const sys = saveData.system === "mega" ? "mega" : "classic"; // alte Saves = Klassisch
+    // gültige Systeme; alte Saves ohne Feld = Klassisch
+    const sys = ["mega", "ultra"].includes(saveData.system) ? saveData.system : "classic";
     money = Number(saveData.money) || 0;
     if (gameMode !== sys) setMode(sys, false);   // Modus + Walzen umstellen
     saveWallet(sys, money);
@@ -1149,7 +1162,7 @@ const symbols = ["🍒","🍋","⭐","🔔","7️⃣","💎","🍀"];
 // Geldbörse pro Modus trennt (Klassisch und MEGA = getrennte Konten).
 let gameMode = "classic";
 
-const WALLET_KEY = { classic: "money", mega: "moneyMega" };
+const WALLET_KEY = { classic: "money", mega: "moneyMega", ultra: "moneyUltra" };
 function loadWallet(mode) {
     const v = localStorage.getItem(WALLET_KEY[mode] || "money");
     return v !== null ? parseFloat(v) : 10;
@@ -1243,8 +1256,18 @@ let reelObjs = [];          // aufgebaute Walzen
 
 const MODE_CFG = {
     classic: { cols: 3, rows: 1, cell: 130, reelw: 130, fs: 70, gap: 20 },
-    mega:    { cols: 5, rows: 3, cell: 88,  reelw: 88,  fs: 50, gap: 12 }
+    mega:    { cols: 5, rows: 3, cell: 88,  reelw: 88,  fs: 50, gap: 12 },
+    ultra:   { cols: 7, rows: 3, cell: 68,  reelw: 68,  fs: 38, gap: 8 }
 };
+
+// Anzeige-Namen + Farben je Modus (interne Keys bleiben classic/mega/ultra,
+// damit bestehende Konten/Saves erhalten bleiben)
+const MODE_INFO = {
+    classic: { label: "Klassisch", color: "#00ff66" },
+    mega:    { label: "MultiGrid", color: "#ff9800" },
+    ultra:   { label: "UltraGrid", color: "#c77dff" }
+};
+const MODE_ORDER = ["classic", "mega", "ultra"];
 
 function cellHtml(sym) {
     return '<div class="reel-cell">' + sym + '</div>';
@@ -1330,9 +1353,10 @@ function otherSymbol(not) {
     return s;
 }
 
-// Erzeugt das 3x5-Gitter (grid[reihe][spalte]); easy = mehr Gewinne
+// Erzeugt das Grid für den aktuellen Modus (grid[reihe][spalte]); easy = mehr Gewinne
 function makeMegaGrid(easy) {
-    const rows = MODE_CFG.mega.rows, cols = MODE_CFG.mega.cols;
+    const cfg = MODE_CFG[gameMode] || MODE_CFG.mega;
+    const rows = cfg.rows, cols = cfg.cols;
     const grid = [];
     for (let r = 0; r < rows; r++) {
         const row = [];
@@ -1361,13 +1385,13 @@ function makeLoseGrid() {
     return makeMegaGrid(false);
 }
 
-// Auszahlung: pro extra Symbol ein bisschen mehr (3er=3x, 4er=4x, 5er=5x)
-const MEGA_MULT = { 3: 3, 4: 4, 5: 5 };
+// Auszahlung: pro extra Symbol ein bisschen mehr (3er=3x, 4er=4x, ...)
+const MEGA_MULT = { 3: 3, 4: 4, 5: 5, 6: 6, 7: 7 };
 const DIAG_MULT = 3;   // schräge 3er
 const COL_MULT = 3;    // senkrechte Spalte (3 gleiche untereinander)
 
 function megaMult(run) {
-    return MEGA_MULT[Math.min(run, 5)] || 3;
+    return MEGA_MULT[Math.min(run, 7)] || 3;
 }
 
 // Wertet das 3x5-Feld aus: ALLE waagerechten 3er+-Gruppen UND schräge 3er
@@ -1519,7 +1543,7 @@ async function startSpin() {
         let steps = [];
         let forcedLose = false;
 
-        if (gameMode === "mega") {
+        if (gameMode !== "classic") {
             let grid;
             if (forceLose) { forceLose = false; forcedLose = true; grid = makeLoseGrid(); }
             else grid = makeMegaGrid(easyMode);
@@ -1527,7 +1551,7 @@ async function startSpin() {
             // Walzen gestaffelt anhalten (links zuerst)
             const proms = [];
             for (let col = 0; col < reelObjs.length; col++) {
-                proms.push(spinReelTo(reelObjs[col], [grid[0][col], grid[1][col], grid[2][col]], 900 + col * 160));
+                proms.push(spinReelTo(reelObjs[col], [grid[0][col], grid[1][col], grid[2][col]], 900 + col * 150));
             }
             await Promise.all(proms);
 
@@ -1537,7 +1561,7 @@ async function startSpin() {
             if (win > 0) {
                 const big = res.lines.some(l => l.run >= 5) || res.lines.length >= 3;
                 statusBox.className = big ? "status jackpot" : "status win";
-                statusBox.innerText = (big ? "🎰 MEGA! " : "✅ ") + res.lines.length + "× Gewinn +" + win.toFixed(2) + "$";
+                statusBox.innerText = (big ? "🎰 " + MODE_INFO[gameMode].label + "! " : "✅ ") + res.lines.length + "× Gewinn +" + win.toFixed(2) + "$";
             } else {
                 statusBox.className = "status lose";
                 statusBox.innerText = "❌ Verloren";
@@ -1615,24 +1639,21 @@ function setMode(mode, switchWallet) {
     }
     gameMode = mode;
     buildReels(mode);
-    const btn = document.getElementById("btnMode");
-    if (mode === "mega") {
-        btn.classList.add("mega");
-        btn.innerText = "🎰 Modus: MEGA (5×3)";
-    } else {
-        btn.classList.remove("mega");
-        btn.innerText = "🎰 Modus: Klassisch (3)";
-    }
+    const info = MODE_INFO[mode] || MODE_INFO.classic;
+    const lbl = document.getElementById("modeLabel");
+    lbl.innerText = info.label;
+    lbl.style.color = info.color;
     if (!mpGame.active) updateMoney();
 }
 
 document.getElementById("btnMode").addEventListener("click", () => {
     if (spinning) return;
-    setMode(gameMode === "mega" ? "classic" : "mega", true);
+    const next = MODE_ORDER[(MODE_ORDER.indexOf(gameMode) + 1) % MODE_ORDER.length];
+    setMode(next, true);
     statusBox.className = "status";
-    statusBox.innerText = gameMode === "mega"
-        ? "🎰 MEGA-Konto: 5 Walzen – waagerecht, senkrecht & schräg gewinnen!"
-        : "Klassisch-Konto: 3 gleiche = Jackpot";
+    statusBox.innerText = next === "classic"
+        ? "Klassisch-Konto: 3 gleiche = Jackpot"
+        : "🎰 " + MODE_INFO[next].label + "-Konto: waagerecht, senkrecht & schräg gewinnen!";
 });
 
 // Walzen beim Laden aufbauen
@@ -1738,7 +1759,7 @@ document.getElementById("importFile").addEventListener("change", async (e) => {
 
     const sys = applyImportedSave(JSON.parse(json));
 
-    alert("✔ " + (sys === "mega" ? "MEGA" : "Klassik") + "-Save geladen!");
+    alert("✔ " + MODE_INFO[sys].label + "-Save geladen!");
 
     savingLocked = false;
 });
