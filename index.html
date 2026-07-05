@@ -62,22 +62,67 @@ body {
 
 .reels {
     display: flex;
-    gap: 20px;
+    gap: var(--reel-gap, 20px);
     margin: 30px 0;
+    justify-content: flex-start;
+    max-width: 100%;
+    overflow-x: auto;
+    padding-bottom: 4px;
 }
 
 .reel {
-    width: 130px;
-    height: 130px;
+    width: var(--reel-w, 130px);
+    height: calc(var(--cell, 130px) * var(--rows, 1));
     background: white;
-    color: black;
-    font-size: 70px;
+    border-radius: 15px;
+    box-shadow: 0 0 15px #000;
+    overflow: hidden;
+    flex-shrink: 0;
+    position: relative;
+}
+
+.reel-strip {
+    display: flex;
+    flex-direction: column;
+    will-change: transform;
+}
+
+.reel-cell {
+    height: var(--cell, 130px);
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 15px;
-    box-shadow: 0 0 15px #000;
+    color: black;
+    font-size: var(--fs, 70px);
+    box-sizing: border-box;
 }
+
+/* Gewinn-Zellen im MEGA-Modus hervorheben */
+.reel-cell.hit {
+    background: #fff3b0;
+    box-shadow: inset 0 0 0 3px gold;
+    animation: hitpulse 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes hitpulse {
+    from { background: #fff3b0; }
+    to   { background: #ffe14d; }
+}
+
+#btnMode {
+    background: #222;
+    color: white;
+    border: 1px solid #444;
+    padding: 10px 16px;
+    font-size: 16px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: 0.2s;
+    margin-bottom: 10px;
+}
+
+#btnMode:hover { background: #333; }
+#btnMode.mega { background: #06351b; border-color: #00ff66; color: #b8ffd2; }
 
 .status {
     font-size: 28px;
@@ -224,6 +269,7 @@ input {
 body.mp-active #btnRefresh,
 body.mp-active #btnEasy,
 body.mp-active #btnReset,
+body.mp-active #btnMode,
 body.mp-active .save-buttons {
     display: none;
 }
@@ -883,6 +929,12 @@ body.mp-active .save-buttons {
             <option value="100">100$</option>
         </select>
 
+        <label>🎰 Spielmodus</label>
+        <select id="setMode">
+            <option value="classic" selected>Klassisch (3 Walzen)</option>
+            <option value="mega">MEGA (7×3, 3 Linien)</option>
+        </select>
+
         <div class="easy-row">
             <input type="checkbox" id="setEasy">
             <label for="setEasy" style="margin:0">🟢 Easy Mode für alle (60% Gewinn)</label>
@@ -938,11 +990,9 @@ body.mp-active .save-buttons {
 
         <div class="money" id="money">Geld: 10.00$</div>
 
-        <div class="reels">
-            <div class="reel" id="r1">🍒</div>
-            <div class="reel" id="r2">🍋</div>
-            <div class="reel" id="r3">⭐</div>
-        </div>
+        <button id="btnMode">🎰 Modus: Klassisch (3)</button>
+
+        <div class="reels" id="reels"></div>
 
         <div class="status" id="status">Hebel ziehen!</div>
 
@@ -1061,7 +1111,7 @@ let mpRef = null;         // Firebase-Ref der eigenen Lobby (lobbies/<CODE>)
 let mpMyId = null;        // eigene Spieler-ID innerhalb der Lobby
 let mpPrevStatus = null;  // letzter bekannter Lobby-Status
 let mpLobbyData = null;   // letzter Lobby-Snapshot aus der Datenbank
-let mpSettings = { duration: 180, startMoney: 25, easy: false, isPublic: true };
+let mpSettings = { duration: 180, startMoney: 25, easy: false, mode: "classic", isPublic: true };
 let mpLobbyCode = null;   // 5-stelliger Lobby-Code
 let mpMyName = "Spieler";
 let mpLeaving = false;    // unterdrückt "Lobby geschlossen" beim absichtlichen Verlassen
@@ -1071,9 +1121,6 @@ function saveMoney() {
     localStorage.setItem("money", money);
 }
 
-const r1 = document.getElementById("r1");
-const r2 = document.getElementById("r2");
-const r3 = document.getElementById("r3");
 const statusBox = document.getElementById("status");
 
 function updateMoney() {
@@ -1117,19 +1164,146 @@ function makeLoseTriple() {
     return [x, y, z];
 }
 
-function spinReel(reel, duration) {
-    return new Promise(resolve => {
-        let interval = setInterval(() => {
-            reel.innerText = randomSymbol();
-        }, 80);
+// ---------- Walzen-Engine (saubere Scroll-Animation) ----------
 
-        setTimeout(() => {
-            clearInterval(interval);
-            const final = randomSymbol();
-            reel.innerText = final;
-            resolve(final);
-        }, duration);
+let gameMode = "classic";   // "classic" (3x1) oder "mega" (7x3)
+let reelObjs = [];          // aufgebaute Walzen
+
+const MODE_CFG = {
+    classic: { cols: 3, rows: 1, cell: 130, reelw: 130, fs: 70, gap: 20 },
+    mega:    { cols: 7, rows: 3, cell: 70,  reelw: 70,  fs: 40, gap: 8 }
+};
+
+function cellHtml(sym) {
+    return '<div class="reel-cell">' + sym + '</div>';
+}
+
+// Baut die Walzen für den aktuellen Modus auf
+function buildReels(mode) {
+    const cfg = MODE_CFG[mode];
+    const wrap = document.getElementById("reels");
+    wrap.style.setProperty("--rows", cfg.rows);
+    wrap.style.setProperty("--cell", cfg.cell + "px");
+    wrap.style.setProperty("--reel-w", cfg.reelw + "px");
+    wrap.style.setProperty("--fs", cfg.fs + "px");
+    wrap.style.setProperty("--reel-gap", cfg.gap + "px");
+    wrap.style.justifyContent = mode === "mega" ? "center" : "flex-start";
+    wrap.innerHTML = "";
+    reelObjs = [];
+    for (let c = 0; c < cfg.cols; c++) {
+        const reel = document.createElement("div");
+        reel.className = "reel";
+        const strip = document.createElement("div");
+        strip.className = "reel-strip";
+        // Startbild: ein paar zufällige Symbole
+        let html = "";
+        for (let r = 0; r < cfg.rows; r++) html += cellHtml(randomSymbol());
+        strip.innerHTML = html;
+        reel.appendChild(strip);
+        wrap.appendChild(reel);
+        reelObjs.push({ strip: strip, rows: cfg.rows, cell: cfg.cell });
+    }
+}
+
+// Dreht eine Walze und lässt sie sauber auf finalSyms landen (von oben)
+function spinReelTo(reelObj, finalSyms, duration) {
+    return new Promise(resolve => {
+        const strip = reelObj.strip;
+        const cell = reelObj.cell;
+        const FILLER = 22;
+
+        // Strip: ganz oben die End-Symbole, darunter viele Füller
+        let html = "";
+        for (const s of finalSyms) html += cellHtml(s);
+        for (let i = 0; i < FILLER; i++) html += cellHtml(randomSymbol());
+        strip.innerHTML = html;
+
+        const dist = FILLER * cell;
+        // Start: nach oben gezogen (Füller im Fenster), dann runter auf 0
+        strip.style.transition = "none";
+        strip.style.transform = "translateY(" + (-dist) + "px)";
+        strip.getBoundingClientRect(); // Reflow erzwingen
+
+        requestAnimationFrame(() => {
+            strip.style.transition = "transform " + duration + "ms cubic-bezier(0.16, 0.84, 0.24, 1)";
+            strip.style.transform = "translateY(0px)";
+        });
+
+        setTimeout(resolve, duration + 30);
     });
+}
+
+// Markiert Gewinn-Zellen im MEGA-Feld
+function highlightMega(winCells) {
+    for (const [r, c] of winCells) {
+        const strip = reelObjs[c] && reelObjs[c].strip;
+        if (strip && strip.children[r]) strip.children[r].classList.add("hit");
+    }
+}
+
+function clearHighlights() {
+    for (const ro of reelObjs) {
+        for (const cell of ro.strip.children) cell.classList.remove("hit");
+    }
+}
+
+function otherSymbol(not) {
+    let s = randomSymbol();
+    while (s === not) s = randomSymbol();
+    return s;
+}
+
+// Erzeugt das 3x7-Gitter (grid[reihe][spalte]); easy = mehr Gewinne
+function makeMegaGrid(easy) {
+    const rows = 3, cols = 7;
+    const grid = [];
+    for (let r = 0; r < rows; r++) {
+        const row = [];
+        for (let c = 0; c < cols; c++) row.push(randomSymbol());
+        grid.push(row);
+    }
+    if (easy) {
+        for (let r = 0; r < rows; r++) {
+            if (Math.random() < 0.55) {
+                const L = 3 + Math.floor(Math.random() * 3); // 3..5 gleiche von links
+                const s = randomSymbol();
+                for (let c = 0; c < L; c++) grid[r][c] = s;
+                if (L < cols && grid[r][L] === s) grid[r][L] = otherSymbol(s); // Lauf sauber begrenzen
+            }
+        }
+    }
+    return grid;
+}
+
+// Bricht alle Gewinnlinien auf (für "während Spin zurückgesetzt")
+function breakMegaWins(grid) {
+    for (let r = 0; r < grid.length; r++) {
+        if (grid[r][0] === grid[r][1] && grid[r][1] === grid[r][2]) {
+            grid[r][2] = otherSymbol(grid[r][0]);
+        }
+    }
+    return grid;
+}
+
+// Wertet das MEGA-Feld aus: je Reihe zählt der Lauf gleicher Symbole von links
+const MEGA_MULT = { 3: 2, 4: 5, 5: 15, 6: 40, 7: 200 };
+
+function evalMega(grid, bet) {
+    let win = 0;
+    const winCells = [];
+    const lines = [];
+    for (let r = 0; r < grid.length; r++) {
+        const row = grid[r];
+        let run = 1;
+        for (let c = 1; c < row.length && row[c] === row[0]; c++) run++;
+        if (run >= 3) {
+            const w = bet * MEGA_MULT[run];
+            win += w;
+            for (let c = 0; c < run; c++) winCells.push([r, c]);
+            lines.push({ run: run, sym: row[0], w: w });
+        }
+    }
+    return { win: win, winCells: winCells, lines: lines };
 }
 
 async function startSpin() {
@@ -1184,61 +1358,72 @@ async function startSpin() {
         money -= bet;
         updateMoney();
 
+        statusBox.className = "status";
         statusBox.innerText = "🎰 Dreht...";
-
-        let a = await spinReel(r1, 1200);
-        let b = await spinReel(r2, 1800);
-        let c = await spinReel(r3, 2200);
-
-        // Easy Mode: Ergebnis auf 60% Gewinn / 40% Verlust setzen
-        if (easyMode) {
-            const roll = Math.random();
-            let triple;
-
-            if (roll < 0.6) {
-                // 60% Gewinn (davon ca. 10% Jackpot)
-                triple = makeWinTriple(roll < 0.06);
-            } else {
-                // 40% Verlust
-                triple = makeLoseTriple();
-            }
-
-            a = triple[0];
-            b = triple[1];
-            c = triple[2];
-
-            r1.innerText = a;
-            r2.innerText = b;
-            r3.innerText = c;
-        }
-
-        if (forceLose) {
-            forceLose = false;
-
-            statusBox.className = "status lose";
-            statusBox.innerText = "❌ Verloren";
-
-            spinning = false;
-            savingLocked = false;
-            updateUIState();
-            return;
-        }
+        clearHighlights();
 
         let win = 0;
+        let forcedLose = false;
 
-        if (a === b && b === c) {
-            win = bet * 10;
-            statusBox.className = "status jackpot";
-            statusBox.innerText = "🎰 JACKPOT +" + win.toFixed(2) + "$";
+        if (gameMode === "mega") {
+            let grid = makeMegaGrid(easyMode);
+            if (forceLose) { forceLose = false; forcedLose = true; grid = breakMegaWins(grid); }
+
+            // 7 Walzen, gestaffelt anhalten (links zuerst)
+            const proms = [];
+            for (let col = 0; col < 7; col++) {
+                proms.push(spinReelTo(reelObjs[col], [grid[0][col], grid[1][col], grid[2][col]], 900 + col * 140));
+            }
+            await Promise.all(proms);
+
+            const res = evalMega(grid, bet);
+            win = res.win;
+            if (win > 0) {
+                highlightMega(res.winCells);
+                const best = Math.max.apply(null, res.lines.map(l => l.run));
+                statusBox.className = best >= 5 ? "status jackpot" : "status win";
+                statusBox.innerText = (best >= 5 ? "🎰 MEGA! " : "✅ ") + res.lines.length + "× Linie +" + win.toFixed(2) + "$";
+            } else {
+                statusBox.className = "status lose";
+                statusBox.innerText = "❌ Verloren";
+            }
+        } else {
+            // Klassisch 3×1
+            let triple;
+            if (forceLose) { forceLose = false; forcedLose = true; triple = makeLoseTriple(); }
+            else if (easyMode) {
+                const roll = Math.random();
+                triple = roll < 0.6 ? makeWinTriple(roll < 0.06) : makeLoseTriple();
+            } else {
+                triple = [randomSymbol(), randomSymbol(), randomSymbol()];
+            }
+
+            await Promise.all([
+                spinReelTo(reelObjs[0], [triple[0]], 1000),
+                spinReelTo(reelObjs[1], [triple[1]], 1300),
+                spinReelTo(reelObjs[2], [triple[2]], 1600)
+            ]);
+
+            const a = triple[0], b = triple[1], c = triple[2];
+            if (a === b && b === c) {
+                win = bet * 10;
+                statusBox.className = "status jackpot";
+                statusBox.innerText = "🎰 JACKPOT +" + win.toFixed(2) + "$";
+            } else if (a === b || b === c || a === c) {
+                win = bet * 2;
+                statusBox.className = "status win";
+                statusBox.innerText = "✅ Gewonnen +" + win.toFixed(2) + "$";
+            } else {
+                statusBox.className = "status lose";
+                statusBox.innerText = "❌ Verloren";
+            }
         }
-        else if (a === b || b === c || a === c) {
-            win = bet * 2;
-            statusBox.className = "status win";
-            statusBox.innerText = "✅ Gewonnen +" + win.toFixed(2) + "$";
-        }
-        else {
+
+        // "Während des Spins zurückgesetzt": kein Gewinn, restliche Spins abbrechen
+        if (forcedLose) {
             statusBox.className = "status lose";
             statusBox.innerText = "❌ Verloren";
+            break;
         }
 
         money += win;
@@ -1253,6 +1438,32 @@ async function startSpin() {
 }
 
 document.getElementById("lever").addEventListener("click", startSpin);
+
+// ---------- Modus wechseln (Klassisch <-> MEGA) ----------
+function setMode(mode) {
+    gameMode = mode;
+    buildReels(mode);
+    const btn = document.getElementById("btnMode");
+    if (mode === "mega") {
+        btn.classList.add("mega");
+        btn.innerText = "🎰 Modus: MEGA (7×3)";
+    } else {
+        btn.classList.remove("mega");
+        btn.innerText = "🎰 Modus: Klassisch (3)";
+    }
+}
+
+document.getElementById("btnMode").addEventListener("click", () => {
+    if (spinning) return;
+    setMode(gameMode === "mega" ? "classic" : "mega");
+    statusBox.className = "status";
+    statusBox.innerText = gameMode === "mega"
+        ? "🎰 MEGA: 7 Walzen, 3 Linien – je 3+ gleiche von links gewinnen!"
+        : "Klassisch: 3 gleiche = Jackpot";
+});
+
+// Walzen beim Laden aufbauen
+setMode("classic");
 
 
 document.getElementById("btnRefresh").addEventListener("click", () => {
@@ -2071,7 +2282,8 @@ function mpTryCreate(statusFn, attempt) {
         settings: {
             duration: mpSettings.duration,
             startMoney: mpSettings.startMoney,
-            easy: !!mpSettings.easy
+            easy: !!mpSettings.easy,
+            mode: mpSettings.mode || "classic"
         },
         players: {}
     };
@@ -2263,6 +2475,7 @@ function mpOnLobbyUpdate(data) {
         mpSettings.duration = data.settings.duration;
         mpSettings.startMoney = data.settings.startMoney;
         mpSettings.easy = !!data.settings.easy;
+        mpSettings.mode = data.settings.mode || "classic";
     }
     mpSettings.isPublic = !!data.public;
 
@@ -2381,11 +2594,13 @@ function mpRenderLobbyList(list) {
 const elSetDuration = document.getElementById("setDuration");
 const elSetStartMoney = document.getElementById("setStartMoney");
 const elSetEasy = document.getElementById("setEasy");
+const elSetMode = document.getElementById("setMode");
 
 function mpApplySettingsToUI() {
     elSetDuration.value = String(mpSettings.duration);
     elSetStartMoney.value = String(mpSettings.startMoney);
     elSetEasy.checked = !!mpSettings.easy;
+    elSetMode.value = mpSettings.mode || "classic";
 }
 
 function mpOnSettingChanged() {
@@ -2393,10 +2608,12 @@ function mpOnSettingChanged() {
     mpSettings.duration = parseInt(elSetDuration.value);
     mpSettings.startMoney = parseInt(elSetStartMoney.value);
     mpSettings.easy = elSetEasy.checked;
+    mpSettings.mode = elSetMode.value;
     mpRef.child("settings").set({
         duration: mpSettings.duration,
         startMoney: mpSettings.startMoney,
-        easy: mpSettings.easy
+        easy: mpSettings.easy,
+        mode: mpSettings.mode || "classic"
     }).catch(err => {
         document.getElementById("lobbyHint").innerText = mpFriendlyError(err);
     });
@@ -2405,6 +2622,7 @@ function mpOnSettingChanged() {
 elSetDuration.addEventListener("change", mpOnSettingChanged);
 elSetStartMoney.addEventListener("change", mpOnSettingChanged);
 elSetEasy.addEventListener("change", mpOnSettingChanged);
+elSetMode.addEventListener("change", mpOnSettingChanged);
 
 function mpShowLobby() {
     const isHost = mpRole === "host";
@@ -2419,6 +2637,7 @@ function mpShowLobby() {
     elSetDuration.disabled = !isHost;
     elSetStartMoney.disabled = !isHost;
     elSetEasy.disabled = !isHost;
+    elSetMode.disabled = !isHost;
     mpApplySettingsToUI();
 
     document.getElementById("btnStartGame").hidden = !isHost;
@@ -2500,6 +2719,7 @@ function mpStartRound(data) {
     // Alle spielen mit den gleichen Regeln.
     // Nach einem Reload mitten in der Runde: eigenen Kontostand behalten.
     easyMode = !!mpSettings.easy;
+    setMode(mpSettings.mode || "classic");
     money = mpResumeMoney !== null ? mpResumeMoney : mpSettings.startMoney;
     mpResumeMoney = null;
 
@@ -2723,6 +2943,9 @@ function mpCleanup() {
     const btnEasy = document.getElementById("btnEasy");
     btnEasy.classList.remove("easy-active");
     btnEasy.innerText = "easy mode";
+
+    // Modus zurück auf Klassisch (MEGA war evtl. Lobby-Vorgabe)
+    setMode("classic");
 
     // Solo-Geld aus dem Save wiederherstellen
     const sm = localStorage.getItem("money");
