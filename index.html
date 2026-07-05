@@ -143,18 +143,25 @@ body {
     to { --ang: 360deg; }
 }
 
-/* Gewinn-Display über den Walzen */
+/* Geld-Anzeige (zählt bei Gewinn hoch) */
 #winDisplay {
-    font-size: 34px;
+    font-size: 38px;
     font-weight: bold;
-    color: #ffe14d;
-    text-align: center;
-    margin: 6px 0 12px;
-    text-shadow: 0 0 12px rgba(255, 225, 77, 0.6);
+    color: #ffffff;
+    margin: 6px 0 14px;
     font-variant-numeric: tabular-nums;
+    transition: transform 0.2s, color 0.2s, text-shadow 0.2s;
+}
+
+#winDisplay.celebrate {
+    color: #ffe14d;
+    transform: scale(1.12);
+    text-shadow: 0 0 16px rgba(255, 225, 77, 0.8);
 }
 
 #btnMode {
+    display: block;
+    width: fit-content;
     background: #222;
     color: white;
     border: 1px solid #444;
@@ -163,7 +170,7 @@ body {
     border-radius: 10px;
     cursor: pointer;
     transition: 0.2s;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
 }
 
 #btnMode:hover { background: #333; }
@@ -977,7 +984,7 @@ body.mp-active .save-buttons {
         <label>🎰 Spielmodus</label>
         <select id="setMode">
             <option value="classic" selected>Klassisch (3 Walzen)</option>
-            <option value="mega">MEGA (7×3, 3 Linien)</option>
+            <option value="mega">MEGA (5×3, schräg &amp; quer)</option>
         </select>
 
         <div class="easy-row">
@@ -1033,11 +1040,9 @@ body.mp-active .save-buttons {
             </label>
     </div>
 
-        <div class="money" id="money">Geld: 10.00$</div>
-
         <button id="btnMode">🎰 Modus: Klassisch (3)</button>
 
-        <div id="winDisplay" hidden></div>
+        <div id="winDisplay">💰 10.00$</div>
 
         <div id="reelsWrap">
             <div class="reels" id="reels"></div>
@@ -1174,8 +1179,8 @@ function saveMoney() {
 const statusBox = document.getElementById("status");
 
 function updateMoney() {
-    document.getElementById("money").innerText =
-        "Geld: " + money.toFixed(2) + "$";
+    document.getElementById("winDisplay").innerText =
+        "💰 " + money.toFixed(2) + "$";
 
     if (mpGame.active) {
         // Im Multiplayer NICHT in den Solo-Save schreiben,
@@ -1221,7 +1226,7 @@ let reelObjs = [];          // aufgebaute Walzen
 
 const MODE_CFG = {
     classic: { cols: 3, rows: 1, cell: 130, reelw: 130, fs: 70, gap: 20 },
-    mega:    { cols: 7, rows: 3, cell: 70,  reelw: 70,  fs: 40, gap: 8 }
+    mega:    { cols: 5, rows: 3, cell: 88,  reelw: 88,  fs: 50, gap: 12 }
 };
 
 function cellHtml(sym) {
@@ -1308,9 +1313,9 @@ function otherSymbol(not) {
     return s;
 }
 
-// Erzeugt das 3x7-Gitter (grid[reihe][spalte]); easy = mehr Gewinne
+// Erzeugt das 3x5-Gitter (grid[reihe][spalte]); easy = mehr Gewinne
 function makeMegaGrid(easy) {
-    const rows = 3, cols = 7;
+    const rows = MODE_CFG.mega.rows, cols = MODE_CFG.mega.cols;
     const grid = [];
     for (let r = 0; r < rows; r++) {
         const row = [];
@@ -1339,30 +1344,35 @@ function makeLoseGrid() {
     return makeMegaGrid(false);
 }
 
-// Auszahlungen: waagerechte Läufe nach Länge, Diagonalen (immer 3) fest
-const MEGA_MULT = { 3: 2, 4: 5, 5: 15, 6: 40, 7: 200 };
-const DIAG_MULT = 4;
+// Auszahlung: pro extra Symbol ein bisschen mehr (3er=3x, 4er=4x, 5er=5x)
+const MEGA_MULT = { 3: 3, 4: 4, 5: 5 };
+const DIAG_MULT = 3;
 
-// Wertet das 3x7-Feld aus: waagerechte 3er+ (irgendwo) UND schräge 3er
+function megaMult(run) {
+    return MEGA_MULT[Math.min(run, 5)] || 3;
+}
+
+// Wertet das 3x5-Feld aus: ALLE waagerechten 3er+-Gruppen UND schräge 3er
 function evalMega(grid, bet) {
     const rows = grid.length, cols = grid[0].length;
     const lines = [];
     let win = 0;
 
-    // Waagerecht: längster Lauf gleicher Symbole je Reihe (darf irgendwo starten)
+    // Waagerecht: jede zusammenhängende Gruppe gleicher Symbole (>=3) zählt
+    // eigenständig – also z.B. 3 Klee UND 3 Diamanten in derselben Reihe.
     for (let r = 0; r < rows; r++) {
-        let bestLen = 1, bestStart = 0, curLen = 1, curStart = 0;
-        for (let c = 1; c < cols; c++) {
-            if (grid[r][c] === grid[r][c - 1]) curLen++;
-            else { curStart = c; curLen = 1; }
-            if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
-        }
-        if (bestLen >= 3) {
-            const cells = [];
-            for (let c = bestStart; c < bestStart + bestLen; c++) cells.push([r, c]);
-            const amount = bet * MEGA_MULT[Math.min(bestLen, 7)];
-            lines.push({ cells: cells, amount: amount, run: bestLen });
-            win += amount;
+        let c = 0;
+        while (c < cols) {
+            let run = 1;
+            while (c + run < cols && grid[r][c + run] === grid[r][c]) run++;
+            if (run >= 3) {
+                const cells = [];
+                for (let k = 0; k < run; k++) cells.push([r, c + k]);
+                const amount = bet * megaMult(run);
+                lines.push({ cells: cells, amount: amount, run: run });
+                win += amount;
+            }
+            c += run;
         }
     }
 
@@ -1397,7 +1407,7 @@ function countUp(from, to, duration, cb) {
 }
 
 function setMoneyDisplay(v) {
-    document.getElementById("money").innerText = "Geld: " + v.toFixed(2) + "$";
+    document.getElementById("winDisplay").innerText = "💰 " + v.toFixed(2) + "$";
 }
 
 // Zählt das Geld pro Gewinnlinie hoch, blitzt die Zellen auf und zeigt
@@ -1408,23 +1418,19 @@ async function celebrateWin(steps) {
     let shown = money; // Stand nach Einsatz-Abzug, vor Gewinn
 
     glow.classList.add("show");
-    disp.hidden = false;
-    disp.innerText = "💰 " + shown.toFixed(2) + "$";
+    disp.classList.add("celebrate");
 
     for (const step of steps) {
         highlightCells(step.cells);
         const to = shown + step.amount;
-        await countUp(shown, to, 480, v => {
-            setMoneyDisplay(v);
-            disp.innerText = "💰 " + v.toFixed(2) + "$";
-        });
+        await countUp(shown, to, 480, v => setMoneyDisplay(v));
         shown = to;
         await sleep(260);
     }
 
     await sleep(500);
     glow.classList.remove("show");
-    disp.hidden = true;
+    disp.classList.remove("celebrate");
 }
 
 async function startSpin() {
@@ -1492,10 +1498,10 @@ async function startSpin() {
             if (forceLose) { forceLose = false; forcedLose = true; grid = makeLoseGrid(); }
             else grid = makeMegaGrid(easyMode);
 
-            // 7 Walzen, gestaffelt anhalten (links zuerst)
+            // Walzen gestaffelt anhalten (links zuerst)
             const proms = [];
-            for (let col = 0; col < 7; col++) {
-                proms.push(spinReelTo(reelObjs[col], [grid[0][col], grid[1][col], grid[2][col]], 900 + col * 140));
+            for (let col = 0; col < reelObjs.length; col++) {
+                proms.push(spinReelTo(reelObjs[col], [grid[0][col], grid[1][col], grid[2][col]], 900 + col * 160));
             }
             await Promise.all(proms);
 
@@ -1503,7 +1509,7 @@ async function startSpin() {
             win = res.win;
             steps = res.lines;
             if (win > 0) {
-                const big = res.lines.some(l => l.run >= 5);
+                const big = res.lines.some(l => l.run >= 5) || res.lines.length >= 3;
                 statusBox.className = big ? "status jackpot" : "status win";
                 statusBox.innerText = (big ? "🎰 MEGA! " : "✅ ") + res.lines.length + "× Gewinn +" + win.toFixed(2) + "$";
             } else {
@@ -1580,7 +1586,7 @@ function setMode(mode) {
     const btn = document.getElementById("btnMode");
     if (mode === "mega") {
         btn.classList.add("mega");
-        btn.innerText = "🎰 Modus: MEGA (7×3)";
+        btn.innerText = "🎰 Modus: MEGA (5×3)";
     } else {
         btn.classList.remove("mega");
         btn.innerText = "🎰 Modus: Klassisch (3)";
@@ -1592,7 +1598,7 @@ document.getElementById("btnMode").addEventListener("click", () => {
     setMode(gameMode === "mega" ? "classic" : "mega");
     statusBox.className = "status";
     statusBox.innerText = gameMode === "mega"
-        ? "🎰 MEGA: 7 Walzen, 3 Linien – je 3+ gleiche von links gewinnen!"
+        ? "🎰 MEGA: 5 Walzen – 3+ gleiche waagerecht oder schräg gewinnen!"
         : "Klassisch: 3 gleiche = Jackpot";
 });
 
