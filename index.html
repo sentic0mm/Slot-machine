@@ -904,7 +904,7 @@ body.mp-active .save-buttons {
     </div>
 
     <label>Neuer Anzeigename</label>
-    <input id="nickInput" maxlength="16" placeholder="z.B. DerZocker">
+    <input id="nickInput" maxlength="16" placeholder="Anzeigename">
 
     <button id="btnNickSave" class="menu-btn primary">💾 Speichern</button>
     <button id="btnNickBack" class="menu-btn">← Zurück</button>
@@ -1092,7 +1092,10 @@ body.mp-active .save-buttons {
 }
 
 async function exportSave() {
+    // Save trägt jetzt den Modus ("system"): Klassisch und MEGA sind
+    // getrennte Save-Systeme mit eigener Datei.
     const saveData = {
+        system: gameMode,
         money: money
     };
 
@@ -1109,10 +1112,20 @@ async function exportSave() {
 
     const a = document.createElement("a");
     a.href = url;
-    a.download = "slot-save.json";
+    a.download = gameMode === "mega" ? "slot-mega-save.json" : "slot-classic-save.json";
     a.click();
 
     URL.revokeObjectURL(url);
+}
+
+// Lädt einen geprüften Save in die passende Geldbörse und stellt den Modus um
+function applyImportedSave(saveData) {
+    const sys = saveData.system === "mega" ? "mega" : "classic"; // alte Saves = Klassisch
+    money = Number(saveData.money) || 0;
+    if (gameMode !== sys) setMode(sys, false);   // Modus + Walzen umstellen
+    saveWallet(sys, money);
+    updateMoney();
+    return sys;
 }
 
 async function importSave(file) {
@@ -1127,26 +1140,30 @@ async function importSave(file) {
         return;
     }
 
-    const saveData = JSON.parse(json);
-
-    money = saveData.money;
-    updateMoney();
+    applyImportedSave(JSON.parse(json));
 }
    // -------bis hier geht der export import teil-------
 const symbols = ["🍒","🍋","⭐","🔔","7️⃣","💎","🍀"];
 
-let money = 10;
+// Aktueller Spielmodus – früh deklariert, weil das Save-System die
+// Geldbörse pro Modus trennt (Klassisch und MEGA = getrennte Konten).
+let gameMode = "classic";
+
+const WALLET_KEY = { classic: "money", mega: "moneyMega" };
+function loadWallet(mode) {
+    const v = localStorage.getItem(WALLET_KEY[mode] || "money");
+    return v !== null ? parseFloat(v) : 10;
+}
+function saveWallet(mode, amount) {
+    localStorage.setItem(WALLET_KEY[mode] || "money", amount);
+}
+
+let money = loadWallet("classic");
 
 let savingLocked = false;
 
 // Easy Mode: 60% Gewinn / 40% Verlust
 let easyMode = false;
-
-const savedMoney = localStorage.getItem("money");
-
-if (savedMoney !== null) {
-    money = parseFloat(savedMoney);
-}
 
 let forceLose = false;
 
@@ -1173,7 +1190,7 @@ let mpLeaving = false;    // unterdrückt "Lobby geschlossen" beim absichtlichen
 let mpBusy = false;       // verhindert Doppelklick beim Erstellen/Beitreten
 
 function saveMoney() {
-    localStorage.setItem("money", money);
+    saveWallet(gameMode, money);
 }
 
 const statusBox = document.getElementById("status");
@@ -1221,7 +1238,7 @@ function makeLoseTriple() {
 
 // ---------- Walzen-Engine (saubere Scroll-Animation) ----------
 
-let gameMode = "classic";   // "classic" (3x1) oder "mega" (7x3)
+// gameMode ist oben deklariert (wegen der getrennten Geldbörsen)
 let reelObjs = [];          // aufgebaute Walzen
 
 const MODE_CFG = {
@@ -1346,7 +1363,8 @@ function makeLoseGrid() {
 
 // Auszahlung: pro extra Symbol ein bisschen mehr (3er=3x, 4er=4x, 5er=5x)
 const MEGA_MULT = { 3: 3, 4: 4, 5: 5 };
-const DIAG_MULT = 3;
+const DIAG_MULT = 3;   // schräge 3er
+const COL_MULT = 3;    // senkrechte Spalte (3 gleiche untereinander)
 
 function megaMult(run) {
     return MEGA_MULT[Math.min(run, 5)] || 3;
@@ -1373,6 +1391,14 @@ function evalMega(grid, bet) {
                 win += amount;
             }
             c += run;
+        }
+    }
+
+    // Senkrecht: eine Spalte mit 3 gleichen Symbolen untereinander
+    for (let c = 0; c < cols; c++) {
+        if (grid[0][c] === grid[1][c] && grid[1][c] === grid[2][c]) {
+            lines.push({ cells: [[0, c], [1, c], [2, c]], amount: bet * COL_MULT, run: 3 });
+            win += bet * COL_MULT;
         }
     }
 
@@ -1580,7 +1606,13 @@ async function startSpin() {
 document.getElementById("lever").addEventListener("click", startSpin);
 
 // ---------- Modus wechseln (Klassisch <-> MEGA) ----------
-function setMode(mode) {
+// switchWallet = true: getrennte Geldbörse mitwechseln (nur beim
+// manuellen Umschalten im Solo, NICHT im Multiplayer).
+function setMode(mode, switchWallet) {
+    if (switchWallet && mode !== gameMode && !mpGame.active) {
+        saveWallet(gameMode, money);     // aktuelles Konto sichern
+        money = loadWallet(mode);        // Konto des neuen Modus laden
+    }
     gameMode = mode;
     buildReels(mode);
     const btn = document.getElementById("btnMode");
@@ -1591,15 +1623,16 @@ function setMode(mode) {
         btn.classList.remove("mega");
         btn.innerText = "🎰 Modus: Klassisch (3)";
     }
+    if (!mpGame.active) updateMoney();
 }
 
 document.getElementById("btnMode").addEventListener("click", () => {
     if (spinning) return;
-    setMode(gameMode === "mega" ? "classic" : "mega");
+    setMode(gameMode === "mega" ? "classic" : "mega", true);
     statusBox.className = "status";
     statusBox.innerText = gameMode === "mega"
-        ? "🎰 MEGA: 5 Walzen – 3+ gleiche waagerecht oder schräg gewinnen!"
-        : "Klassisch: 3 gleiche = Jackpot";
+        ? "🎰 MEGA-Konto: 5 Walzen – waagerecht, senkrecht & schräg gewinnen!"
+        : "Klassisch-Konto: 3 gleiche = Jackpot";
 });
 
 // Walzen beim Laden aufbauen
@@ -1703,12 +1736,9 @@ document.getElementById("importFile").addEventListener("change", async (e) => {
         return;
     }
 
-    const saveData = JSON.parse(json);
+    const sys = applyImportedSave(JSON.parse(json));
 
-    money = saveData.money;
-    updateMoney();
-
-    alert("✔ Save geladen!");
+    alert("✔ " + (sys === "mega" ? "MEGA" : "Klassik") + "-Save geladen!");
 
     savingLocked = false;
 });
@@ -2338,8 +2368,7 @@ document.getElementById("btnSolo").addEventListener("click", () => {
     // Solo = das normale Spiel mit Save wie bisher.
     // Merken, damit ein Reload direkt wieder ins Solo-Spiel führt.
     sessionStorage.setItem("soloActive", "1");
-    const sm = localStorage.getItem("money");
-    money = sm !== null ? parseFloat(sm) : 10;
+    money = loadWallet(gameMode);          // Konto des aktuellen Modus
     document.body.classList.remove("mp-active");
     document.getElementById("mpSidebar").hidden = true;
     statusBox.className = "status";
@@ -3087,9 +3116,8 @@ function mpCleanup() {
     // Modus zurück auf Klassisch (MEGA war evtl. Lobby-Vorgabe)
     setMode("classic");
 
-    // Solo-Geld aus dem Save wiederherstellen
-    const sm = localStorage.getItem("money");
-    money = sm !== null ? parseFloat(sm) : 10;
+    // Solo-Konto (Klassisch) wiederherstellen
+    money = loadWallet("classic");
     updateMoney();
 
     mpLeaving = false;
