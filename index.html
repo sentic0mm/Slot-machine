@@ -1387,8 +1387,9 @@ function makeLoseGrid() {
 
 // Auszahlung: pro extra Symbol ein bisschen mehr (3er=3x, 4er=4x, ...)
 const MEGA_MULT = { 3: 3, 4: 4, 5: 5, 6: 6, 7: 7 };
-const DIAG_MULT = 3;   // schräge 3er
-const COL_MULT = 3;    // senkrechte Spalte (3 gleiche untereinander)
+const DIAG_MULT = 3;      // schräge 3er
+const COL_MULT = 3;       // senkrechte Spalte (3 gleiche untereinander)
+const JACKPOT_MULT = 500; // ganzes Feld ein Symbol = JACKPOT
 
 function megaMult(run) {
     return MEGA_MULT[Math.min(run, 7)] || 3;
@@ -1438,7 +1439,26 @@ function evalMega(grid, bet) {
         }
     }
 
-    return { win: win, lines: lines };
+    // JACKPOT: das GANZE Feld zeigt dasselbe Symbol
+    let jackpot = true;
+    const first = grid[0][0];
+    for (let r = 0; r < rows && jackpot; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (grid[r][c] !== first) { jackpot = false; break; }
+        }
+    }
+    if (jackpot) {
+        const bonus = bet * JACKPOT_MULT;
+        const allCells = [];
+        for (let r = 0; r < rows; r++)
+            for (let c = 0; c < cols; c++) allCells.push([r, c]);
+        // Alles wird EIN großer Jackpot-Schritt (statt vieler kleiner Linien)
+        lines.length = 0;
+        lines.push({ cells: allCells, amount: bonus, run: cols, jackpot: true });
+        win = bonus;
+    }
+
+    return { win: win, lines: lines, jackpot: jackpot };
 }
 
 // ---------- Gewinn-Feier: Geld hochzählen + Regenbogen-Rahmen ----------
@@ -1558,7 +1578,10 @@ async function startSpin() {
             const res = evalMega(grid, bet);
             win = res.win;
             steps = res.lines;
-            if (win > 0) {
+            if (res.jackpot) {
+                statusBox.className = "status jackpot";
+                statusBox.innerText = "🎰🎰🎰 JACKPOT!!! Alles gleich! +" + win.toFixed(2) + "$";
+            } else if (win > 0) {
                 const big = res.lines.some(l => l.run >= 5) || res.lines.length >= 3;
                 statusBox.className = big ? "status jackpot" : "status win";
                 statusBox.innerText = (big ? "🎰 " + MODE_INFO[gameMode].label + "! " : "✅ ") + res.lines.length + "× Gewinn +" + win.toFixed(2) + "$";
