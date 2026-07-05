@@ -97,16 +97,61 @@ body {
     box-sizing: border-box;
 }
 
-/* Gewinn-Zellen im MEGA-Modus hervorheben */
+/* Gewinn-Zellen kurz aufblitzen lassen (Regenbogen statt Gold) */
 .reel-cell.hit {
-    background: #fff3b0;
-    box-shadow: inset 0 0 0 3px gold;
-    animation: hitpulse 0.6s ease-in-out infinite alternate;
+    box-shadow: inset 0 0 0 3px #fff;
+    animation: hitflash 0.55s ease-in-out 2;
 }
 
-@keyframes hitpulse {
-    from { background: #fff3b0; }
-    to   { background: #ffe14d; }
+@keyframes hitflash {
+    0%   { background: #ffffff; }
+    25%  { background: #ff7a7a; }
+    50%  { background: #7affab; }
+    75%  { background: #7ac8ff; }
+    100% { background: #ffffff; }
+}
+
+/* Umlaufender Regenbogen-Rahmen (nur kurz bei Gewinn sichtbar) */
+@property --ang { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+
+#reelsWrap {
+    position: relative;
+    display: inline-block;
+}
+
+#reelGlow {
+    position: absolute;
+    inset: -7px;
+    border-radius: 20px;
+    padding: 7px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.25s;
+    background: conic-gradient(from var(--ang),
+        #ff0040, #ff8000, #ffe000, #40ff00, #00ffe0, #0080ff, #8000ff, #ff0040);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+}
+
+#reelGlow.show {
+    opacity: 1;
+    animation: spinborder 1.1s linear infinite;
+}
+
+@keyframes spinborder {
+    to { --ang: 360deg; }
+}
+
+/* Gewinn-Display über den Walzen */
+#winDisplay {
+    font-size: 34px;
+    font-weight: bold;
+    color: #ffe14d;
+    text-align: center;
+    margin: 6px 0 12px;
+    text-shadow: 0 0 12px rgba(255, 225, 77, 0.6);
+    font-variant-numeric: tabular-nums;
 }
 
 #btnMode {
@@ -992,7 +1037,12 @@ body.mp-active .save-buttons {
 
         <button id="btnMode">🎰 Modus: Klassisch (3)</button>
 
-        <div class="reels" id="reels"></div>
+        <div id="winDisplay" hidden></div>
+
+        <div id="reelsWrap">
+            <div class="reels" id="reels"></div>
+            <div id="reelGlow"></div>
+        </div>
 
         <div class="status" id="status">Hebel ziehen!</div>
 
@@ -1233,17 +1283,22 @@ function spinReelTo(reelObj, finalSyms, duration) {
     });
 }
 
-// Markiert Gewinn-Zellen im MEGA-Feld
-function highlightMega(winCells) {
-    for (const [r, c] of winCells) {
-        const strip = reelObjs[c] && reelObjs[c].strip;
-        if (strip && strip.children[r]) strip.children[r].classList.add("hit");
-    }
-}
-
 function clearHighlights() {
     for (const ro of reelObjs) {
         for (const cell of ro.strip.children) cell.classList.remove("hit");
+    }
+}
+
+// Lässt die angegebenen Zellen aufblitzen ([reihe, spalte])
+function highlightCells(cells) {
+    for (const [r, c] of cells) {
+        const ro = reelObjs[c];
+        if (ro && ro.strip.children[r]) {
+            const el = ro.strip.children[r];
+            el.classList.remove("hit");
+            void el.offsetWidth;       // Animation neu starten
+            el.classList.add("hit");
+        }
     }
 }
 
@@ -1275,35 +1330,101 @@ function makeMegaGrid(easy) {
     return grid;
 }
 
-// Bricht alle Gewinnlinien auf (für "während Spin zurückgesetzt")
-function breakMegaWins(grid) {
-    for (let r = 0; r < grid.length; r++) {
-        if (grid[r][0] === grid[r][1] && grid[r][1] === grid[r][2]) {
-            grid[r][2] = otherSymbol(grid[r][0]);
-        }
+// Erzeugt ein Gitter garantiert ohne Gewinn (für "während Spin zurückgesetzt")
+function makeLoseGrid() {
+    for (let i = 0; i < 40; i++) {
+        const g = makeMegaGrid(false);
+        if (evalMega(g, 1).win === 0) return g;
     }
-    return grid;
+    return makeMegaGrid(false);
 }
 
-// Wertet das MEGA-Feld aus: je Reihe zählt der Lauf gleicher Symbole von links
+// Auszahlungen: waagerechte Läufe nach Länge, Diagonalen (immer 3) fest
 const MEGA_MULT = { 3: 2, 4: 5, 5: 15, 6: 40, 7: 200 };
+const DIAG_MULT = 4;
 
+// Wertet das 3x7-Feld aus: waagerechte 3er+ (irgendwo) UND schräge 3er
 function evalMega(grid, bet) {
-    let win = 0;
-    const winCells = [];
+    const rows = grid.length, cols = grid[0].length;
     const lines = [];
-    for (let r = 0; r < grid.length; r++) {
-        const row = grid[r];
-        let run = 1;
-        for (let c = 1; c < row.length && row[c] === row[0]; c++) run++;
-        if (run >= 3) {
-            const w = bet * MEGA_MULT[run];
-            win += w;
-            for (let c = 0; c < run; c++) winCells.push([r, c]);
-            lines.push({ run: run, sym: row[0], w: w });
+    let win = 0;
+
+    // Waagerecht: längster Lauf gleicher Symbole je Reihe (darf irgendwo starten)
+    for (let r = 0; r < rows; r++) {
+        let bestLen = 1, bestStart = 0, curLen = 1, curStart = 0;
+        for (let c = 1; c < cols; c++) {
+            if (grid[r][c] === grid[r][c - 1]) curLen++;
+            else { curStart = c; curLen = 1; }
+            if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+        }
+        if (bestLen >= 3) {
+            const cells = [];
+            for (let c = bestStart; c < bestStart + bestLen; c++) cells.push([r, c]);
+            const amount = bet * MEGA_MULT[Math.min(bestLen, 7)];
+            lines.push({ cells: cells, amount: amount, run: bestLen });
+            win += amount;
         }
     }
-    return { win: win, winCells: winCells, lines: lines };
+
+    // Schräg: Diagonalen der Länge 3 (runter-rechts \ und hoch-rechts /)
+    for (let c = 0; c + 2 < cols; c++) {
+        if (grid[0][c] === grid[1][c + 1] && grid[1][c + 1] === grid[2][c + 2]) {
+            lines.push({ cells: [[0, c], [1, c + 1], [2, c + 2]], amount: bet * DIAG_MULT, run: 3 });
+            win += bet * DIAG_MULT;
+        }
+        if (grid[2][c] === grid[1][c + 1] && grid[1][c + 1] === grid[0][c + 2]) {
+            lines.push({ cells: [[2, c], [1, c + 1], [0, c + 2]], amount: bet * DIAG_MULT, run: 3 });
+            win += bet * DIAG_MULT;
+        }
+    }
+
+    return { win: win, lines: lines };
+}
+
+// ---------- Gewinn-Feier: Geld hochzählen + Regenbogen-Rahmen ----------
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function countUp(from, to, duration, cb) {
+    return new Promise(resolve => {
+        const start = Date.now();
+        const iv = setInterval(() => {
+            const t = Math.min(1, (Date.now() - start) / duration);
+            cb(from + (to - from) * t);
+            if (t >= 1) { clearInterval(iv); resolve(); }
+        }, 30);
+    });
+}
+
+function setMoneyDisplay(v) {
+    document.getElementById("money").innerText = "Geld: " + v.toFixed(2) + "$";
+}
+
+// Zählt das Geld pro Gewinnlinie hoch, blitzt die Zellen auf und zeigt
+// kurz den umlaufenden Regenbogen-Rahmen + ein Display mit dem Stand.
+async function celebrateWin(steps) {
+    const glow = document.getElementById("reelGlow");
+    const disp = document.getElementById("winDisplay");
+    let shown = money; // Stand nach Einsatz-Abzug, vor Gewinn
+
+    glow.classList.add("show");
+    disp.hidden = false;
+    disp.innerText = "💰 " + shown.toFixed(2) + "$";
+
+    for (const step of steps) {
+        highlightCells(step.cells);
+        const to = shown + step.amount;
+        await countUp(shown, to, 480, v => {
+            setMoneyDisplay(v);
+            disp.innerText = "💰 " + v.toFixed(2) + "$";
+        });
+        shown = to;
+        await sleep(260);
+    }
+
+    await sleep(500);
+    glow.classList.remove("show");
+    disp.hidden = true;
 }
 
 async function startSpin() {
@@ -1363,11 +1484,13 @@ async function startSpin() {
         clearHighlights();
 
         let win = 0;
+        let steps = [];
         let forcedLose = false;
 
         if (gameMode === "mega") {
-            let grid = makeMegaGrid(easyMode);
-            if (forceLose) { forceLose = false; forcedLose = true; grid = breakMegaWins(grid); }
+            let grid;
+            if (forceLose) { forceLose = false; forcedLose = true; grid = makeLoseGrid(); }
+            else grid = makeMegaGrid(easyMode);
 
             // 7 Walzen, gestaffelt anhalten (links zuerst)
             const proms = [];
@@ -1378,11 +1501,11 @@ async function startSpin() {
 
             const res = evalMega(grid, bet);
             win = res.win;
+            steps = res.lines;
             if (win > 0) {
-                highlightMega(res.winCells);
-                const best = Math.max.apply(null, res.lines.map(l => l.run));
-                statusBox.className = best >= 5 ? "status jackpot" : "status win";
-                statusBox.innerText = (best >= 5 ? "🎰 MEGA! " : "✅ ") + res.lines.length + "× Linie +" + win.toFixed(2) + "$";
+                const big = res.lines.some(l => l.run >= 5);
+                statusBox.className = big ? "status jackpot" : "status win";
+                statusBox.innerText = (big ? "🎰 MEGA! " : "✅ ") + res.lines.length + "× Gewinn +" + win.toFixed(2) + "$";
             } else {
                 statusBox.className = "status lose";
                 statusBox.innerText = "❌ Verloren";
@@ -1407,10 +1530,13 @@ async function startSpin() {
             const a = triple[0], b = triple[1], c = triple[2];
             if (a === b && b === c) {
                 win = bet * 10;
+                steps = [{ cells: [[0, 0], [0, 1], [0, 2]], amount: win }];
                 statusBox.className = "status jackpot";
                 statusBox.innerText = "🎰 JACKPOT +" + win.toFixed(2) + "$";
             } else if (a === b || b === c || a === c) {
                 win = bet * 2;
+                const cells = (a === b) ? [[0, 0], [0, 1]] : (b === c ? [[0, 1], [0, 2]] : [[0, 0], [0, 2]]);
+                steps = [{ cells: cells, amount: win }];
                 statusBox.className = "status win";
                 statusBox.innerText = "✅ Gewonnen +" + win.toFixed(2) + "$";
             } else {
@@ -1424,6 +1550,14 @@ async function startSpin() {
             statusBox.className = "status lose";
             statusBox.innerText = "❌ Verloren";
             break;
+        }
+
+        if (win > 0 && spins === 1) {
+            // Einzel-Spin: Geld hochzählen mit Regenbogen-Feier
+            await celebrateWin(steps);
+        } else if (win > 0) {
+            // Mehrfach-Spin: schnell, nur kurz aufblitzen
+            for (const st of steps) highlightCells(st.cells);
         }
 
         money += win;
