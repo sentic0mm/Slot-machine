@@ -2457,37 +2457,6 @@ function accUpdateMenu() {
     document.getElementById("btnLogout").hidden = !account;
 }
 
-// Beim Start prüfen, ob der Account noch existiert (der Support
-// könnte ihn inzwischen umbenannt oder gelöscht haben)
-if (account && fdb) {
-    presenceStart();
-    fdb.ref("users/" + account.uid).get().then(snap => {
-        const user = snap.val();
-        if (!user) {
-            presenceStop(true);
-            account = null;
-            localStorage.removeItem("account");
-            accUpdateMenu();
-        } else if (user.handle !== account.handle || (user.nick || null) !== (account.nick || null) || !!user.hasRecovery !== !!account.hasRecovery) {
-            account.handle = user.handle;
-            account.nick = user.nick || null;
-            account.hasRecovery = !!user.hasRecovery;
-            localStorage.setItem("account", JSON.stringify(account));
-            accUpdateMenu();
-            presenceStart(); // Name/Handle im Status-Eintrag aktualisieren
-        }
-        // Passwort noch nicht verschlüsselt? -> zum Neu-Einloggen auffordern
-        maybeShowPwEncWarning(!!user.hasPwEnc);
-    }).catch(() => {});
-}
-
-function mpGetName() {
-    if (!account) return "Gast";
-    // Nickname ohne @, echter Accountname mit @ (so kann niemand
-    // einen echten @Namen als Nickname faken)
-    return account.nick ? account.nick : "@" + account.handle;
-}
-
 // ---------- Globale Präsenz: wer ist gerade online? ----------
 //
 // Jeder eingeloggte Spieler steht unter /status/<uid> in der Datenbank:
@@ -2495,6 +2464,8 @@ function mpGetName() {
 // Bei Verbindungsabbruch (Tab zu, WLAN weg, Handy aus ...) setzt der
 // Firebase-Server selbst online:false + lastSeen (onDisconnect). Der
 // Betreiber sieht so in der Console live, wer gerade im Spiel ist.
+// WICHTIG: Muss VOR dem Start-Check unten stehen, der presenceStart()
+// sofort beim Laden aufruft (sonst ReferenceError auf presConnRef).
 
 let presConnRef = null; // Listener auf .info/connected
 
@@ -2535,6 +2506,37 @@ function presenceStop(removeEntry) {
             lastSeen: firebase.database.ServerValue.TIMESTAMP
         }).catch(() => {});
     }
+}
+
+// Beim Start prüfen, ob der Account noch existiert (der Support
+// könnte ihn inzwischen umbenannt oder gelöscht haben)
+if (account && fdb) {
+    presenceStart();
+    fdb.ref("users/" + account.uid).get().then(snap => {
+        const user = snap.val();
+        if (!user) {
+            presenceStop(true);
+            account = null;
+            localStorage.removeItem("account");
+            accUpdateMenu();
+        } else if (user.handle !== account.handle || (user.nick || null) !== (account.nick || null) || !!user.hasRecovery !== !!account.hasRecovery) {
+            account.handle = user.handle;
+            account.nick = user.nick || null;
+            account.hasRecovery = !!user.hasRecovery;
+            localStorage.setItem("account", JSON.stringify(account));
+            accUpdateMenu();
+            presenceStart(); // Name/Handle im Status-Eintrag aktualisieren
+        }
+        // Passwort noch nicht verschlüsselt? -> zum Neu-Einloggen auffordern
+        maybeShowPwEncWarning(!!user.hasPwEnc);
+    }).catch(() => {});
+}
+
+function mpGetName() {
+    if (!account) return "Gast";
+    // Nickname ohne @, echter Accountname mit @ (so kann niemand
+    // einen echten @Namen als Nickname faken)
+    return account.nick ? account.nick : "@" + account.handle;
 }
 
 // ---------- Anzeigename (Nickname) ändern ----------
