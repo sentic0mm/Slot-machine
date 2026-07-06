@@ -537,6 +537,95 @@ body.mp-active .save-buttons {
     color: #00ff66;
 }
 
+.player-list .player-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.player-list .mod-btns {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.player-list .mod-btns button {
+    background: #333;
+    border: 1px solid #555;
+    color: #eee;
+    border-radius: 6px;
+    font-size: 14px;
+    padding: 3px 7px;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.player-list .mod-btns button:hover { background: #444; }
+.player-list .mod-btns .ban:hover { background: #500; border-color: #f55; }
+.player-list .mod-btns .kick:hover { background: #530; border-color: #fa0; }
+
+/* ---------- Text-Chat ---------- */
+
+.chat-box {
+    background: #222;
+    border: 1px solid #444;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 18px 0;
+    text-align: left;
+}
+
+.chat-title { color: #aaa; font-size: 16px; margin-bottom: 8px; }
+
+.chat-messages {
+    height: 160px;
+    overflow-y: auto;
+    background: #141414;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 15px;
+    line-height: 1.5;
+}
+
+.chat-messages .cm-name { color: #ffd400; font-weight: bold; }
+.chat-messages .cm-name.me { color: #00ff66; }
+.chat-messages .cm-sys { color: #888; font-style: italic; }
+
+.chat-input-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.chat-input-row input {
+    flex: 1;
+    width: auto;
+    background: #111;
+    color: white;
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 15px;
+}
+
+.chat-input-row button {
+    width: 46px;
+    flex-shrink: 0;
+    background: #06351b;
+    color: white;
+    border: 1px solid #00ff66;
+    border-radius: 8px;
+    font-size: 18px;
+    cursor: pointer;
+}
+
+.chat-input-row button:hover { background: #0a4a26; }
+.chat-input-row input:disabled,
+.chat-input-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.chat-hint { color: #ff5555; font-size: 13px; min-height: 16px; margin-top: 5px; }
+
 /* ---------- Scoreboard (rechte Seite im Spiel) ---------- */
 
 #mpSidebar {
@@ -1000,6 +1089,17 @@ body.mp-active .save-buttons {
     </div>
 
     <div class="player-list" id="lobbyPlayers"></div>
+
+    <!-- Text-Chat -->
+    <div class="chat-box">
+        <div class="chat-title">💬 Chat</div>
+        <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-input-row">
+            <input id="chatInput" maxlength="200" placeholder="Nachricht…">
+            <button id="btnChatSend">➤</button>
+        </div>
+        <div id="chatHint" class="chat-hint"></div>
+    </div>
 
     <button id="btnStartGame" class="menu-btn primary" hidden>🚀 Spiel starten</button>
     <div id="lobbyHint" class="menu-status"></div>
@@ -1869,6 +1969,7 @@ function mpNow() {
 
 let mpConnRef = null;       // Listener auf .info/connected (Präsenz)
 let mpHousekeepInt = null;  // Aufräum-Intervall
+let mpChatRef = null;       // Chat-Listener der Lobby
 let mpResumeMoney = null;   // eigener Kontostand nach einem Reload mitten in der Runde
 
 // Wer länger als das offline ist, fliegt wirklich raus
@@ -2492,6 +2593,7 @@ function mpTryCreate(statusFn, attempt) {
         public: mpSettings.isPublic,
         status: "waiting",
         createdAt: mpNow(),
+        hostUid: account.uid,          // für den host-bezogenen Bann
         settings: {
             duration: mpSettings.duration,
             startMoney: mpSettings.startMoney,
@@ -2548,6 +2650,24 @@ function mpJoin(code, statusFn) {
 
     const ref = fdb.ref("lobbies/" + code);
 
+    // Erst Lobby lesen -> Host ermitteln -> host-bezogenen Bann prüfen
+    ref.get().then(async snap => {
+        const data = snap.val();
+        if (data && data.hostUid) {
+            try {
+                const banned = (await fdb.ref("hostbans/" + data.hostUid + "/" + account.uid).get()).val();
+                if (banned === true) {
+                    mpBusy = false;
+                    statusFn("🚫 Du wurdest vom Host dieser Lobby gebannt.");
+                    return;
+                }
+            } catch (e) {}
+        }
+        mpDoJoin(ref, code, statusFn);
+    }).catch(() => mpDoJoin(ref, code, statusFn));
+}
+
+function mpDoJoin(ref, code, statusFn) {
     ref.transaction(cur => {
         // Erster Versuch läuft oft mit leerem Cache (cur === null).
         // null zurückgeben = "nichts ändern": existiert die Lobby doch,
@@ -2617,10 +2737,74 @@ function mpEnterLobby(code, role) {
     clearInterval(mpHousekeepInt);
     mpHousekeepInt = setInterval(mpHousekeeping, 10000);
 
+    // Chat abonnieren (letzte 60 Nachrichten)
+    document.getElementById("chatMessages").innerHTML = "";
+    document.getElementById("chatHint").innerText = "";
+    mpChatRef = mpRef.child("chat").limitToLast(60);
+    mpChatRef.on("child_added", snap => mpAddChatMessage(snap.val()));
+
     mpCloseBrowser();
     mpRef.on("value", snap => mpOnLobbyUpdate(snap.val()));
     mpShowLobby();
 }
+
+// ---------- Text-Chat ----------
+
+function escapeHtml(s) {
+    const d = document.createElement("div");
+    d.innerText = String(s == null ? "" : s);
+    return d.innerHTML;
+}
+
+function mpAddChatMessage(msg) {
+    if (!msg) return;
+    const box = document.getElementById("chatMessages");
+    const line = document.createElement("div");
+    if (msg.sys) {
+        line.innerHTML = '<span class="cm-sys">' + escapeHtml(msg.text) + '</span>';
+    } else {
+        const mine = account && msg.uid === account.uid;
+        line.innerHTML = '<span class="cm-name' + (mine ? ' me' : '') + '">'
+            + escapeHtml(msg.name) + ':</span> ' + escapeHtml(msg.text);
+    }
+    box.appendChild(line);
+    box.scrollTop = box.scrollHeight;
+}
+
+function mpAmIMuted() {
+    const me = mpLobbyData && mpLobbyData.players && mpLobbyData.players[mpMyId];
+    return !!(me && me.muted);
+}
+
+function mpSendChat() {
+    const input = document.getElementById("chatInput");
+    const text = input.value.trim().slice(0, 200);
+    const hint = document.getElementById("chatHint");
+    if (!text || !mpRef) return;
+    if (mpAmIMuted()) { hint.innerText = "🔇 Du bist vom Host gemutet."; return; }
+    hint.innerText = "";
+    mpRef.child("chat").push({
+        uid: account ? account.uid : null,
+        name: mpMyName,
+        text: text,
+        time: firebase.database.ServerValue.TIMESTAMP
+    }).catch(err => { hint.innerText = mpFriendlyError(err); });
+    input.value = "";
+}
+
+function mpUpdateChatInput() {
+    const muted = mpAmIMuted();
+    document.getElementById("chatInput").disabled = muted;
+    document.getElementById("btnChatSend").disabled = muted;
+    const hint = document.getElementById("chatHint");
+    if (muted) hint.innerText = "🔇 Du bist vom Host gemutet.";
+    else if (hint.innerText.startsWith("🔇")) hint.innerText = "";
+}
+
+document.getElementById("btnChatSend").addEventListener("click", mpSendChat);
+document.getElementById("chatInput").addEventListener("keydown", e => {
+    if (e.key === "Enter") mpSendChat();
+});
 
 // Host: entfernt Spieler, die zu lange offline sind.
 // Clients: lösen die Lobby auf, wenn der Host dauerhaft weg ist.
@@ -2660,8 +2844,10 @@ function mpPlayerList(data) {
         .map(id => ({
             id: id,
             name: players[id].name || "Spieler",
+            uid: players[id].uid || null,
             money: Number(players[id].money) || 0,
             host: !!players[id].host,
+            muted: !!players[id].muted,
             online: players[id].online !== false,
             joinedAt: players[id].joinedAt || 0
         }))
@@ -2678,9 +2864,9 @@ function mpOnLobbyUpdate(data) {
 
     mpLobbyData = data;
 
-    // Wurden wir (z.B. nach zu langem Offline-Sein) entfernt?
+    // Wurden wir entfernt? (Kick vom Host oder zu lange offline)
     if (mpRole === "client" && data.players && !data.players[mpMyId]) {
-        mpConnectionLost("❌ Du wurdest aus der Lobby entfernt (zu lange offline).");
+        mpConnectionLost("❌ Du wurdest aus der Lobby entfernt.");
         return;
     }
 
@@ -2871,15 +3057,73 @@ function mpRenderLobby(players) {
     head.style.color = "#aaa";
     elLobbyPlayers.appendChild(head);
 
+    const isHost = mpRole === "host";
     for (const p of players) {
         const row = document.createElement("div");
         row.className = "player-row" + (p.id === mpMyId ? " me" : "");
-        row.innerText = (p.host ? "👑 " : "🎮 ") + p.name
-            + (p.id === mpMyId ? " (Du)" : "")
-            + (p.online === false ? " 📴" : "");
         if (p.online === false) row.style.opacity = "0.55";
+
+        const nameSpan = document.createElement("span");
+        nameSpan.innerText = (p.host ? "👑 " : "🎮 ") + p.name
+            + (p.id === mpMyId ? " (Du)" : "")
+            + (p.muted ? " 🔇" : "")
+            + (p.online === false ? " 📴" : "");
+        row.appendChild(nameSpan);
+
+        // Moderations-Buttons: nur der Host, nur für andere Spieler
+        if (isHost && !p.host) {
+            const mod = document.createElement("div");
+            mod.className = "mod-btns";
+
+            const muteBtn = document.createElement("button");
+            muteBtn.innerText = p.muted ? "🔊" : "🔇";
+            muteBtn.title = p.muted ? "Entmuten" : "Muten";
+            muteBtn.addEventListener("click", () => mpModMute(p.id, !p.muted));
+            mod.appendChild(muteBtn);
+
+            const kickBtn = document.createElement("button");
+            kickBtn.className = "kick";
+            kickBtn.innerText = "👢";
+            kickBtn.title = "Kicken";
+            kickBtn.addEventListener("click", () => mpModKick(p.id, p.name));
+            mod.appendChild(kickBtn);
+
+            const banBtn = document.createElement("button");
+            banBtn.className = "ban";
+            banBtn.innerText = "🚫";
+            banBtn.title = "Bannen (kommt in deine Lobbys nicht mehr rein)";
+            banBtn.addEventListener("click", () => mpModBan(p.id, p.uid, p.name));
+            mod.appendChild(banBtn);
+
+            row.appendChild(mod);
+        }
+
         elLobbyPlayers.appendChild(row);
     }
+
+    mpUpdateChatInput();
+}
+
+// ---------- Moderation (nur Host) ----------
+
+function mpModMute(id, mute) {
+    if (mpRole !== "host" || !mpRef || id === mpMyId) return;
+    mpRef.child("players/" + id + "/muted").set(mute ? true : null).catch(() => {});
+}
+
+function mpModKick(id, name) {
+    if (mpRole !== "host" || !mpRef || id === mpMyId) return;
+    if (!confirm("Spieler " + name + " kicken?")) return;
+    mpRef.child("chat").push({ sys: true, text: "👢 " + name + " wurde gekickt." }).catch(() => {});
+    mpRef.child("players/" + id).remove().catch(() => {});
+}
+
+function mpModBan(id, uid, name) {
+    if (mpRole !== "host" || !mpRef || id === mpMyId) return;
+    if (!confirm("Spieler " + name + " bannen? Er kommt dann in keine deiner Lobbys mehr rein.")) return;
+    if (uid) fdb.ref("hostbans/" + account.uid + "/" + uid).set(true).catch(() => {});
+    mpRef.child("chat").push({ sys: true, text: "🚫 " + name + " wurde gebannt." }).catch(() => {});
+    mpRef.child("players/" + id).remove().catch(() => {});
 }
 
 document.getElementById("btnCopyCode").addEventListener("click", () => {
@@ -3122,6 +3366,7 @@ function mpCleanup() {
     clearInterval(mpHousekeepInt);
     mpHousekeepInt = null;
     if (mpConnRef) { mpConnRef.off(); mpConnRef = null; }
+    if (mpChatRef) { mpChatRef.off(); mpChatRef = null; }
     mpResumeMoney = null;
 
     // Nur die Buttons führen hierher -> Session vergessen,
