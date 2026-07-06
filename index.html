@@ -591,7 +591,14 @@ body.mp-active .save-buttons {
 .chat-messages .cm-name { color: #ffd400; font-weight: bold; }
 .chat-messages .cm-name.me { color: #00ff66; }
 
-/* Betreiber-Badge: blaues </>-Schild neben dem Namen */
+/* Betreiber-Badge: Bild aus der Datenbank neben dem Namen */
+.dev-badge-img {
+    height: 1.15em;
+    vertical-align: -0.2em;
+    margin: 0 4px;
+}
+
+/* Betreiber-Badge: Text-Fallback, falls das Bild fehlt */
 .dev-badge {
     display: inline-block;
     background: #1a97e0;
@@ -2070,8 +2077,30 @@ try { account = JSON.parse(localStorage.getItem("account") || "null"); } catch (
 // ein </>-Badge neben dem Namen und Moderations-Rechte in JEDER Lobby.
 const OWNER_UID = "Vollzugriff";
 
+// Badge-Bild und Freigabeliste kommen aus der Datenbank (/badges).
+// Dort kann per DB-Regel NUR der Betreiber schreiben (Console/Admin-Panel)
+// – niemand kann sich selbst ein Badge geben, das andere sehen.
+let badgeImage = null;   // Data-URI des Badge-Bildes
+let badgeAllowed = {};   // { uid: true } – wer das Badge tragen darf
+
+if (fdb) {
+    fdb.ref("badges").on("value", s => {
+        const b = s.val() || {};
+        badgeImage = typeof b.image === "string" ? b.image : null;
+        badgeAllowed = b.allowed || {};
+        accUpdateMenu(); // schon gerendertes Menü nachziehen
+        if (mpLobbyData && mpRef) mpRenderLobby(mpPlayerList(mpLobbyData));
+    });
+}
+
 function devBadgeHtml(uid) {
-    return uid === OWNER_UID ? ' <span class="dev-badge">&lt;/&gt;</span>' : "";
+    if (!uid || badgeAllowed[uid] !== true) return "";
+    // Nur echte Bild-Data-URIs einbetten (Schutz, falls der Knoten je
+    // etwas anderes enthält)
+    if (badgeImage && /^data:image\//.test(badgeImage)) {
+        return ' <img class="dev-badge-img" src="' + badgeImage + '" alt="&lt;/&gt;" title="Betreiber">';
+    }
+    return ' <span class="dev-badge">&lt;/&gt;</span>'; // Fallback ohne Bild
 }
 
 let accMode = "login"; // "login" | "register"
