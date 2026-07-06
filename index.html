@@ -2868,14 +2868,15 @@ document.getElementById("gameChatInput").addEventListener("keydown", e => { if (
 // Kostenloser STUN-Server für NAT; kein TURN (in manchen Netzen evtl.
 // keine Verbindung). Voice ist opt-in (Mikrofon-Erlaubnis nötig).
 
+// TURN/STUN über Metered (kostenloses Konto des Betreibers) – nötig,
+// damit die Sprachverbindung auch durch strenge Router/NAT kommt.
 const RTC_CONFIG = { iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    // Kostenlose öffentliche TURN-Server (openrelay) – helfen, wenn STUN
-    // wegen strenger Router/NAT nicht reicht.
-    { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+    { urls: "stun:stun.relay.metered.ca:80" },
+    { urls: "turn:global.relay.metered.ca:80", username: "7755620568c8af6560c6f9eb", credential: "U9PJfR5r17yIYNep" },
+    { urls: "turn:global.relay.metered.ca:80?transport=tcp", username: "7755620568c8af6560c6f9eb", credential: "U9PJfR5r17yIYNep" },
+    { urls: "turn:global.relay.metered.ca:443", username: "7755620568c8af6560c6f9eb", credential: "U9PJfR5r17yIYNep" },
+    { urls: "turns:global.relay.metered.ca:443?transport=tcp", username: "7755620568c8af6560c6f9eb", credential: "U9PJfR5r17yIYNep" }
 ]};
 
 let voiceOn = false;         // hab ich Voice beigetreten?
