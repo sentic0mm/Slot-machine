@@ -2870,7 +2870,12 @@ document.getElementById("gameChatInput").addEventListener("keydown", e => { if (
 
 const RTC_CONFIG = { iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" }
+    { urls: "stun:stun1.l.google.com:19302" },
+    // Kostenlose öffentliche TURN-Server (openrelay) – helfen, wenn STUN
+    // wegen strenger Router/NAT nicht reicht.
+    { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
 ]};
 
 let voiceOn = false;         // hab ich Voice beigetreten?
@@ -2954,7 +2959,7 @@ function voiceSend(toId, msg) {
 
 function voiceCreatePeer(peerId) {
     const pc = new RTCPeerConnection(RTC_CONFIG);
-    rtcPeers[peerId] = { pc: pc, audioEl: null, pending: [], remoteSet: false };
+    rtcPeers[peerId] = { pc: pc, audioEl: null, pending: [], remoteSet: false, state: "neu" };
     if (localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
     pc.onicecandidate = e => {
         if (e.candidate) voiceSend(peerId, { kind: "cand", from: mpMyId, payload: e.candidate.toJSON() });
@@ -2964,11 +2969,22 @@ function voiceCreatePeer(peerId) {
         if (!a) {
             a = document.createElement("audio");
             a.autoplay = true;
+            a.playsInline = true;
             a.dataset.peer = peerId;
             document.body.appendChild(a);
             if (rtcPeers[peerId]) rtcPeers[peerId].audioEl = a;
         }
         a.srcObject = e.streams[0];
+        a.volume = 1;
+        // Autoplay kann blockiert sein -> explizit abspielen
+        a.play().catch(() => {
+            const hint = document.getElementById("gameChatHint") || document.getElementById("chatHint");
+            if (hint) hint.innerText = "🔊 Tippe irgendwo, um den Ton zu aktivieren.";
+        });
+    };
+    pc.onconnectionstatechange = () => {
+        if (rtcPeers[peerId]) rtcPeers[peerId].state = pc.connectionState;
+        renderVoiceBars();
     };
     return pc;
 }
@@ -3077,11 +3093,32 @@ function renderVoiceBars() {
 
         const stat = document.createElement("span");
         stat.className = "vstat" + (voiceOn ? " speaking" : "");
-        stat.innerText = hostMutedVoice ? "🔇 vom Host gemutet"
-            : (n > 0 ? "🎙️ " + n + " im Voice" : "");
+        if (hostMutedVoice) {
+            stat.innerText = "🔇 vom Host gemutet";
+        } else if (voiceOn) {
+            const total = Object.keys(rtcPeers).length;
+            const conn = Object.values(rtcPeers).filter(p => p.state === "connected").length;
+            let s = "🎙️ " + n + " im Voice";
+            if (total > 0) s += " · " + conn + "/" + total + " verbunden";
+            if (total > 0 && conn < total) {
+                const failed = Object.values(rtcPeers).some(p => p.state === "failed");
+                s += failed ? " ⚠️" : " …";
+            }
+            stat.innerText = s;
+        } else if (n > 0) {
+            stat.innerText = "🎙️ " + n + " im Voice";
+        }
         bar.appendChild(stat);
     }
 }
+
+// Blockierten Ton bei erster Nutzer-Interaktion aktivieren
+document.addEventListener("click", () => {
+    for (const id of Object.keys(rtcPeers)) {
+        const a = rtcPeers[id].audioEl;
+        if (a && a.paused) a.play().catch(() => {});
+    }
+}, true);
 
 // Host: entfernt Spieler, die zu lange offline sind.
 // Clients: lösen die Lobby auf, wenn der Host dauerhaft weg ist.
