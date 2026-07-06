@@ -626,6 +626,36 @@ body.mp-active .save-buttons {
 
 .chat-hint { color: #ff5555; font-size: 13px; min-height: 16px; margin-top: 5px; }
 
+/* ---------- Voice-Leiste ---------- */
+.voice-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.voice-bar button {
+    background: #333;
+    color: white;
+    border: 1px solid #555;
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-size: 14px;
+    cursor: pointer;
+    width: auto;
+}
+
+.voice-bar button:hover { background: #444; }
+.voice-bar button.on { background: #06351b; border-color: #00ff66; color: #b8ffd2; }
+.voice-bar button.muted { background: #400; border-color: #f55; color: #ffcccc; }
+.voice-bar .vstat { font-size: 13px; color: #aaa; }
+.voice-bar .speaking { color: #00ff66; }
+
+/* Sidebar-Chat etwas kompakter */
+#mpSidebar .chat-input-row input { font-size: 14px; padding: 7px; }
+#mpSidebar .voice-bar { margin-top: 10px; }
+
 /* ---------- Scoreboard (rechte Seite im Spiel) ---------- */
 
 #mpSidebar {
@@ -1090,9 +1120,10 @@ body.mp-active .save-buttons {
 
     <div class="player-list" id="lobbyPlayers"></div>
 
-    <!-- Text-Chat -->
+    <!-- Text-Chat + Voice -->
     <div class="chat-box">
-        <div class="chat-title">💬 Chat</div>
+        <div class="chat-title">💬 Chat &amp; 🎙️ Voice</div>
+        <div class="voice-bar" id="voiceBarLobby"></div>
         <div id="chatMessages" class="chat-messages"></div>
         <div class="chat-input-row">
             <input id="chatInput" maxlength="200" placeholder="Nachricht…">
@@ -1178,6 +1209,16 @@ body.mp-active .save-buttons {
         <div id="mpTimer">0:00</div>
         <div class="mp-score-title">🏆 Scoreboard</div>
         <div id="mpScores"></div>
+
+        <!-- In-Game Voice + Chat -->
+        <div class="voice-bar" id="voiceBarGame"></div>
+        <div id="gameChatMessages" class="chat-messages" style="height:120px;"></div>
+        <div class="chat-input-row">
+            <input id="gameChatInput" maxlength="200" placeholder="Nachricht…">
+            <button id="btnGameChatSend">➤</button>
+        </div>
+        <div id="gameChatHint" class="chat-hint"></div>
+
         <button id="btnMpLeave">🚪 Verlassen</button>
     </div>
 
@@ -2739,7 +2780,10 @@ function mpEnterLobby(code, role) {
 
     // Chat abonnieren (letzte 60 Nachrichten)
     document.getElementById("chatMessages").innerHTML = "";
+    document.getElementById("gameChatMessages").innerHTML = "";
     document.getElementById("chatHint").innerText = "";
+    document.getElementById("gameChatHint").innerText = "";
+    renderVoiceBars();
     mpChatRef = mpRef.child("chat").limitToLast(60);
     mpChatRef.on("child_added", snap => mpAddChatMessage(snap.val()));
 
@@ -2758,17 +2802,21 @@ function escapeHtml(s) {
 
 function mpAddChatMessage(msg) {
     if (!msg) return;
-    const box = document.getElementById("chatMessages");
-    const line = document.createElement("div");
-    if (msg.sys) {
-        line.innerHTML = '<span class="cm-sys">' + escapeHtml(msg.text) + '</span>';
-    } else {
-        const mine = account && msg.uid === account.uid;
-        line.innerHTML = '<span class="cm-name' + (mine ? ' me' : '') + '">'
-            + escapeHtml(msg.name) + ':</span> ' + escapeHtml(msg.text);
+    // In Lobby-Chat UND In-Game-Chat anzeigen
+    for (const boxId of ["chatMessages", "gameChatMessages"]) {
+        const box = document.getElementById(boxId);
+        if (!box) continue;
+        const line = document.createElement("div");
+        if (msg.sys) {
+            line.innerHTML = '<span class="cm-sys">' + escapeHtml(msg.text) + '</span>';
+        } else {
+            const mine = account && msg.uid === account.uid;
+            line.innerHTML = '<span class="cm-name' + (mine ? ' me' : '') + '">'
+                + escapeHtml(msg.name) + ':</span> ' + escapeHtml(msg.text);
+        }
+        box.appendChild(line);
+        box.scrollTop = box.scrollHeight;
     }
-    box.appendChild(line);
-    box.scrollTop = box.scrollHeight;
 }
 
 function mpAmIMuted() {
@@ -2776,10 +2824,10 @@ function mpAmIMuted() {
     return !!(me && me.muted);
 }
 
-function mpSendChat() {
-    const input = document.getElementById("chatInput");
+function mpSendChat(inputId, hintId) {
+    const input = document.getElementById(inputId || "chatInput");
+    const hint = document.getElementById(hintId || "chatHint");
     const text = input.value.trim().slice(0, 200);
-    const hint = document.getElementById("chatHint");
     if (!text || !mpRef) return;
     if (mpAmIMuted()) { hint.innerText = "🔇 Du bist vom Host gemutet."; return; }
     hint.innerText = "";
@@ -2794,17 +2842,246 @@ function mpSendChat() {
 
 function mpUpdateChatInput() {
     const muted = mpAmIMuted();
-    document.getElementById("chatInput").disabled = muted;
-    document.getElementById("btnChatSend").disabled = muted;
-    const hint = document.getElementById("chatHint");
-    if (muted) hint.innerText = "🔇 Du bist vom Host gemutet.";
-    else if (hint.innerText.startsWith("🔇")) hint.innerText = "";
+    for (const [inp, btn, hintId] of [["chatInput","btnChatSend","chatHint"],["gameChatInput","btnGameChatSend","gameChatHint"]]) {
+        const i = document.getElementById(inp), b = document.getElementById(btn), h = document.getElementById(hintId);
+        if (i) i.disabled = muted;
+        if (b) b.disabled = muted;
+        if (h) {
+            if (muted) h.innerText = "🔇 Du bist vom Host gemutet.";
+            else if (h.innerText.startsWith("🔇")) h.innerText = "";
+        }
+    }
+    // Host-Mute mutet auch die Stimme
+    voiceApplyHostMute(muted);
 }
 
-document.getElementById("btnChatSend").addEventListener("click", mpSendChat);
-document.getElementById("chatInput").addEventListener("keydown", e => {
-    if (e.key === "Enter") mpSendChat();
-});
+document.getElementById("btnChatSend").addEventListener("click", () => mpSendChat("chatInput", "chatHint"));
+document.getElementById("chatInput").addEventListener("keydown", e => { if (e.key === "Enter") mpSendChat("chatInput", "chatHint"); });
+document.getElementById("btnGameChatSend").addEventListener("click", () => mpSendChat("gameChatInput", "gameChatHint"));
+document.getElementById("gameChatInput").addEventListener("keydown", e => { if (e.key === "Enter") mpSendChat("gameChatInput", "gameChatHint"); });
+
+// ======================================================================
+// =========================== VOICE-CHAT (WebRTC) =======================
+// ======================================================================
+// Mesh: jeder Voice-Teilnehmer verbindet sich mit jedem anderen direkt.
+// Signalisierung läuft über Firebase (/lobbies/<code>/rtc/<toId>).
+// Kostenloser STUN-Server für NAT; kein TURN (in manchen Netzen evtl.
+// keine Verbindung). Voice ist opt-in (Mikrofon-Erlaubnis nötig).
+
+const RTC_CONFIG = { iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" }
+]};
+
+let voiceOn = false;         // hab ich Voice beigetreten?
+let micMuted = false;        // hab ich mich selbst stummgeschaltet?
+let hostMutedVoice = false;  // hat der Host mich gemutet?
+let localStream = null;
+const rtcPeers = {};         // peerId -> { pc, audioEl, pending: [], remoteSet }
+let mpRtcInbox = null;
+
+function voiceApplyTracks() {
+    if (!localStream) return;
+    const enabled = !micMuted && !hostMutedVoice;
+    localStream.getAudioTracks().forEach(t => { t.enabled = enabled; });
+}
+
+function voiceApplyHostMute(muted) {
+    hostMutedVoice = !!muted;
+    voiceApplyTracks();
+    renderVoiceBars();
+}
+
+async function voiceJoin() {
+    if (voiceOn || !mpRef) return;
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (e) {
+        alert("🎙️ Kein Mikrofon-Zugriff. Bitte im Browser erlauben.");
+        return;
+    }
+    voiceOn = true;
+    micMuted = false;
+    voiceApplyTracks();
+
+    // Eingehende Signale empfangen
+    mpRtcInbox = mpRef.child("rtc/" + mpMyId);
+    mpRtcInbox.on("child_added", async snap => {
+        const msg = snap.val();
+        snap.ref.remove().catch(() => {});   // Nachricht "verbrauchen"
+        if (!msg || !voiceOn) return;
+        try { await voiceHandleSignal(msg); } catch (e) { console.warn("RTC:", e); }
+    });
+
+    mpRef.child("players/" + mpMyId + "/voice").set(true).catch(() => {});
+    mpRef.child("players/" + mpMyId + "/voice").onDisconnect().remove();
+
+    voiceConnectAll();
+    renderVoiceBars();
+}
+
+function voiceLeave() {
+    voiceOn = false;
+    if (mpRtcInbox) { mpRtcInbox.off(); mpRtcInbox = null; }
+    for (const id of Object.keys(rtcPeers)) voiceClosePeer(id);
+    if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+    if (mpRef && mpMyId) {
+        mpRef.child("players/" + mpMyId + "/voice").remove().catch(() => {});
+        mpRef.child("rtc/" + mpMyId).remove().catch(() => {});
+    }
+    renderVoiceBars();
+}
+
+function voiceToggleMic() {
+    if (!voiceOn) return;
+    micMuted = !micMuted;
+    voiceApplyTracks();
+    renderVoiceBars();
+}
+
+function voiceClosePeer(id) {
+    const p = rtcPeers[id];
+    if (!p) return;
+    try { p.pc.close(); } catch (e) {}
+    if (p.audioEl) p.audioEl.remove();
+    delete rtcPeers[id];
+}
+
+function voiceSend(toId, msg) {
+    if (!mpRef) return;
+    mpRef.child("rtc/" + toId).push(msg).catch(() => {});
+}
+
+function voiceCreatePeer(peerId) {
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+    rtcPeers[peerId] = { pc: pc, audioEl: null, pending: [], remoteSet: false };
+    if (localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    pc.onicecandidate = e => {
+        if (e.candidate) voiceSend(peerId, { kind: "cand", from: mpMyId, payload: e.candidate.toJSON() });
+    };
+    pc.ontrack = e => {
+        let a = rtcPeers[peerId] && rtcPeers[peerId].audioEl;
+        if (!a) {
+            a = document.createElement("audio");
+            a.autoplay = true;
+            a.dataset.peer = peerId;
+            document.body.appendChild(a);
+            if (rtcPeers[peerId]) rtcPeers[peerId].audioEl = a;
+        }
+        a.srcObject = e.streams[0];
+    };
+    return pc;
+}
+
+async function voiceCall(peerId) {
+    const pc = voiceCreatePeer(peerId);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    voiceSend(peerId, { kind: "offer", from: mpMyId, payload: { type: offer.type, sdp: offer.sdp } });
+}
+
+async function voiceHandleSignal(msg) {
+    const from = msg.from;
+    if (!from) return;
+
+    if (msg.kind === "offer") {
+        let entry = rtcPeers[from];
+        const pc = entry ? entry.pc : voiceCreatePeer(from);
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.payload));
+        rtcPeers[from].remoteSet = true;
+        await voiceFlushPending(from);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        voiceSend(from, { kind: "answer", from: mpMyId, payload: { type: answer.type, sdp: answer.sdp } });
+    }
+    else if (msg.kind === "answer") {
+        const entry = rtcPeers[from];
+        if (!entry) return;
+        await entry.pc.setRemoteDescription(new RTCSessionDescription(msg.payload));
+        entry.remoteSet = true;
+        await voiceFlushPending(from);
+    }
+    else if (msg.kind === "cand") {
+        const entry = rtcPeers[from];
+        if (!entry) return;
+        if (entry.remoteSet) {
+            try { await entry.pc.addIceCandidate(new RTCIceCandidate(msg.payload)); } catch (e) {}
+        } else {
+            entry.pending.push(msg.payload);
+        }
+    }
+}
+
+async function voiceFlushPending(id) {
+    const entry = rtcPeers[id];
+    if (!entry) return;
+    for (const c of entry.pending) {
+        try { await entry.pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+    }
+    entry.pending = [];
+}
+
+// Zu allen Voice-Teilnehmern verbinden (Initiator = kleinere ID)
+function voiceConnectAll() {
+    if (!voiceOn || !mpLobbyData || !mpLobbyData.players) return;
+    const players = mpLobbyData.players;
+    for (const id of Object.keys(players)) {
+        if (id === mpMyId) continue;
+        if (players[id].voice !== true) continue;
+        if (rtcPeers[id]) continue;
+        if (mpMyId < id) voiceCall(id).catch(() => {}); // nur eine Seite ruft an
+    }
+    // Verbindungen zu Leuten trennen, die Voice verlassen haben
+    for (const id of Object.keys(rtcPeers)) {
+        if (!players[id] || players[id].voice !== true) voiceClosePeer(id);
+    }
+}
+
+function voiceCountActive() {
+    let n = voiceOn ? 1 : 0;
+    if (mpLobbyData && mpLobbyData.players) {
+        for (const id of Object.keys(mpLobbyData.players)) {
+            if (id !== mpMyId && mpLobbyData.players[id].voice === true) n++;
+        }
+    }
+    return n;
+}
+
+// Baut die Voice-Leiste in Lobby + Spiel
+function renderVoiceBars() {
+    const n = voiceCountActive();
+    for (const barId of ["voiceBarLobby", "voiceBarGame"]) {
+        const bar = document.getElementById(barId);
+        if (!bar) continue;
+        bar.innerHTML = "";
+
+        const joinBtn = document.createElement("button");
+        if (!voiceOn) {
+            joinBtn.innerText = "🎙️ Voice beitreten";
+            joinBtn.addEventListener("click", voiceJoin);
+        } else {
+            joinBtn.innerText = "🚪 Voice verlassen";
+            joinBtn.classList.add("on");
+            joinBtn.addEventListener("click", voiceLeave);
+        }
+        bar.appendChild(joinBtn);
+
+        if (voiceOn) {
+            const micBtn = document.createElement("button");
+            micBtn.innerText = micMuted ? "🔇 Mikro an" : "🎤 Mikro aus";
+            if (micMuted) micBtn.classList.add("muted");
+            micBtn.addEventListener("click", voiceToggleMic);
+            micBtn.disabled = hostMutedVoice;
+            bar.appendChild(micBtn);
+        }
+
+        const stat = document.createElement("span");
+        stat.className = "vstat" + (voiceOn ? " speaking" : "");
+        stat.innerText = hostMutedVoice ? "🔇 vom Host gemutet"
+            : (n > 0 ? "🎙️ " + n + " im Voice" : "");
+        bar.appendChild(stat);
+    }
+}
 
 // Host: entfernt Spieler, die zu lange offline sind.
 // Clients: lösen die Lobby auf, wenn der Host dauerhaft weg ist.
@@ -2879,6 +3156,10 @@ function mpOnLobbyUpdate(data) {
     mpSettings.isPublic = !!data.public;
 
     const players = mpPlayerList(data);
+
+    // Voice-Verbindungen aktuell halten (Teilnehmer, Aus-/Beitritte)
+    voiceConnectAll();
+    mpUpdateChatInput();
 
     if (data.status === "waiting") {
         mpApplySettingsToUI();
@@ -3367,6 +3648,7 @@ function mpCleanup() {
     mpHousekeepInt = null;
     if (mpConnRef) { mpConnRef.off(); mpConnRef = null; }
     if (mpChatRef) { mpChatRef.off(); mpChatRef = null; }
+    voiceLeave();   // Voice sauber beenden
     mpResumeMoney = null;
 
     // Nur die Buttons führen hierher -> Session vergessen,
