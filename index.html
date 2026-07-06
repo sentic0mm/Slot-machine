@@ -590,6 +590,21 @@ body.mp-active .save-buttons {
 
 .chat-messages .cm-name { color: #ffd400; font-weight: bold; }
 .chat-messages .cm-name.me { color: #00ff66; }
+
+/* Betreiber-Badge: blaues </>-Schild neben dem Namen */
+.dev-badge {
+    display: inline-block;
+    background: #1a97e0;
+    color: #fff;
+    font-family: Consolas, monospace;
+    font-weight: bold;
+    font-size: 0.72em;
+    padding: 1px 7px;
+    border-radius: 999px;
+    margin: 0 4px;
+    vertical-align: middle;
+    letter-spacing: 1px;
+}
 .chat-messages .cm-sys { color: #888; font-style: italic; }
 
 .chat-input-row {
@@ -2050,6 +2065,15 @@ function setMenuStatus(text) {
 let account = null; // { uid, handle }
 try { account = JSON.parse(localStorage.getItem("account") || "null"); } catch (e) {}
 
+// ---------- Betreiber-Kennzeichnung ----------
+// Der Account mit dieser Sonder-uid ist der Betreiber: er bekommt überall
+// ein </>-Badge neben dem Namen und Moderations-Rechte in JEDER Lobby.
+const OWNER_UID = "Vollzugriff";
+
+function devBadgeHtml(uid) {
+    return uid === OWNER_UID ? ' <span class="dev-badge">&lt;/&gt;</span>' : "";
+}
+
 let accMode = "login"; // "login" | "register"
 
 const elLoginStatus = document.getElementById("loginStatus");
@@ -2441,9 +2465,9 @@ function accUpdateMenu() {
         // Name & ID stehen dezent unten rechts, nicht groß im Menü
         info.hidden = true;
         tag.hidden = false;
-        tag.innerText = account.nick
+        tag.innerHTML = escapeHtml(account.nick
             ? "👤 " + account.nick + " (@" + account.handle + ") · " + account.uid
-            : "👤 @" + account.handle + " · " + account.uid;
+            : "👤 @" + account.handle + " · " + account.uid) + devBadgeHtml(account.uid);
     } else {
         info.hidden = false;
         info.innerText = "🎭 Du spielst als Gast – Multiplayer braucht einen Account.";
@@ -2870,7 +2894,7 @@ function mpAddChatMessage(msg) {
         } else {
             const mine = account && msg.uid === account.uid;
             line.innerHTML = '<span class="cm-name' + (mine ? ' me' : '') + '">'
-                + escapeHtml(msg.name) + ':</span> ' + escapeHtml(msg.text);
+                + escapeHtml(msg.name) + devBadgeHtml(msg.uid) + ':</span> ' + escapeHtml(msg.text);
         }
         box.appendChild(line);
         box.scrollTop = box.scrollHeight;
@@ -3434,21 +3458,23 @@ function mpRenderLobby(players) {
     head.style.color = "#aaa";
     elLobbyPlayers.appendChild(head);
 
-    const isHost = mpRole === "host";
+    // Moderieren darf der Host der Lobby – und der Betreiber ÜBERALL
+    const canMod = mpRole === "host" || (account && account.uid === OWNER_UID);
     for (const p of players) {
         const row = document.createElement("div");
         row.className = "player-row" + (p.id === mpMyId ? " me" : "");
         if (p.online === false) row.style.opacity = "0.55";
 
         const nameSpan = document.createElement("span");
-        nameSpan.innerText = (p.host ? "👑 " : "🎮 ") + p.name
-            + (p.id === mpMyId ? " (Du)" : "")
-            + (p.muted ? " 🔇" : "")
-            + (p.online === false ? " 📴" : "");
+        nameSpan.innerHTML = escapeHtml((p.host ? "👑 " : "🎮 ") + p.name)
+            + devBadgeHtml(p.uid)
+            + escapeHtml((p.id === mpMyId ? " (Du)" : "")
+                + (p.muted ? " 🔇" : "")
+                + (p.online === false ? " 📴" : ""));
         row.appendChild(nameSpan);
 
-        // Moderations-Buttons: nur der Host, nur für andere Spieler
-        if (isHost && !p.host) {
+        // Moderations-Buttons: nie für die eigene Zeile
+        if (canMod && p.id !== mpMyId) {
             const mod = document.createElement("div");
             mod.className = "mod-btns";
 
@@ -3481,24 +3507,30 @@ function mpRenderLobby(players) {
     mpUpdateChatInput();
 }
 
-// ---------- Moderation (nur Host) ----------
+// ---------- Moderation (Host der Lobby + Betreiber überall) ----------
+
+function mpCanMod() {
+    return mpRole === "host" || (account && account.uid === OWNER_UID);
+}
 
 function mpModMute(id, mute) {
-    if (mpRole !== "host" || !mpRef || id === mpMyId) return;
+    if (!mpCanMod() || !mpRef || id === mpMyId) return;
     mpRef.child("players/" + id + "/muted").set(mute ? true : null).catch(() => {});
 }
 
 function mpModKick(id, name) {
-    if (mpRole !== "host" || !mpRef || id === mpMyId) return;
+    if (!mpCanMod() || !mpRef || id === mpMyId) return;
     if (!confirm("Spieler " + name + " kicken?")) return;
     mpRef.child("chat").push({ sys: true, text: "👢 " + name + " wurde gekickt." }).catch(() => {});
     mpRef.child("players/" + id).remove().catch(() => {});
 }
 
 function mpModBan(id, uid, name) {
-    if (mpRole !== "host" || !mpRef || id === mpMyId) return;
-    if (!confirm("Spieler " + name + " bannen? Er kommt dann in keine deiner Lobbys mehr rein.")) return;
-    if (uid) fdb.ref("hostbans/" + account.uid + "/" + uid).set(true).catch(() => {});
+    if (!mpCanMod() || !mpRef || id === mpMyId) return;
+    if (!confirm("Spieler " + name + " bannen? Er kommt dann in keine Lobbys dieses Hosts mehr rein.")) return;
+    // Der Betreiber bannt in fremden Lobbys im Namen des jeweiligen Hosts
+    const banHost = (mpLobbyData && mpLobbyData.hostUid) || account.uid;
+    if (uid) fdb.ref("hostbans/" + banHost + "/" + uid).set(true).catch(() => {});
     mpRef.child("chat").push({ sys: true, text: "🚫 " + name + " wurde gebannt." }).catch(() => {});
     mpRef.child("players/" + id).remove().catch(() => {});
 }
@@ -3626,7 +3658,7 @@ function mpWriteResult() {
     if (!mpRef || !mpLobbyData) return;
 
     const ranking = mpPlayerList(mpLobbyData)
-        .map(p => ({ id: p.id, name: p.name, money: p.money }))
+        .map(p => ({ id: p.id, name: p.name, money: p.money, uid: p.uid || null }))
         .sort((a, b) => b.money - a.money);
 
     mpRef.update({ status: "finished", result: { ranking: ranking } }).catch(() => {});
@@ -3651,9 +3683,10 @@ function mpRenderScores(scores) {
 
         const name = document.createElement("span");
         name.className = "score-name";
-        name.innerText = (medals[i] || (i + 1) + ".") + " " + p.name
-            + (p.id === mpMyId ? " (Du)" : "")
-            + (p.online === false ? " 📴" : "");
+        name.innerHTML = escapeHtml((medals[i] || (i + 1) + ".") + " " + p.name)
+            + devBadgeHtml(p.uid)
+            + escapeHtml((p.id === mpMyId ? " (Du)" : "")
+                + (p.online === false ? " 📴" : ""));
         if (p.online === false) row.style.opacity = "0.55";
 
         const val = document.createElement("span");
@@ -3703,7 +3736,9 @@ function mpShowResults(ranking) {
         row.className = "result-row" + (p.id === mpMyId ? " me" : "");
 
         const name = document.createElement("span");
-        name.innerText = (medals[i] || (i + 1) + ".") + " " + p.name + (p.id === mpMyId ? " (Du)" : "");
+        name.innerHTML = escapeHtml((medals[i] || (i + 1) + ".") + " " + p.name)
+            + devBadgeHtml(p.uid)
+            + escapeHtml(p.id === mpMyId ? " (Du)" : "");
 
         const val = document.createElement("span");
         val.innerText = p.money.toFixed(2) + "$";
