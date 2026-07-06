@@ -1,2 +1,12 @@
 # Admin-Tool bleibt lokal - nur für den Betreiber, nicht veröffentlichen!
 admin-tool.html
+
+# Firebase-Deploy-Dateien & Admin-Schlüssel: NIEMALS veröffentlichen!
+# (slot-admin-key.json ist der private RSA-Schlüssel für die Passwort-Entschlüsselung)
+slot-admin-key.json
+admin-hosting/
+.firebaserc
+.firebase/
+firebase.json
+database.rules.json
+database.rules.backup.json

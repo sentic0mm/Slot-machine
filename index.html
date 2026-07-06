@@ -2259,6 +2259,7 @@ async function accLogin(handle, pass) {
 function accLoggedIn(uid, handle, nick, hasRecovery) {
     account = { uid: uid, handle: handle, nick: nick || null, hasRecovery: !!hasRecovery };
     localStorage.setItem("account", JSON.stringify(account));
+    presenceStart();
     // Frischer Login/Registrierung -> Passwort wird gerade verschlüsselt,
     // also keine Warnung mehr nötig.
     document.getElementById("pwencWarn").hidden = true;
@@ -2303,6 +2304,7 @@ document.getElementById("btnGoLogin").addEventListener("click", () => {
 });
 
 document.getElementById("btnLogout").addEventListener("click", () => {
+    presenceStop();
     account = null;
     localStorage.removeItem("account");
     localStorage.removeItem("guestMode");
@@ -2326,6 +2328,7 @@ function maybeShowPwEncWarning(hasPwEnc) {
 
 document.getElementById("btnPwencRelogin").addEventListener("click", () => {
     const h = account ? account.handle : "";
+    presenceStop();
     account = null;
     localStorage.removeItem("account");
     sessionStorage.removeItem("pwencSnooze");
@@ -2457,9 +2460,11 @@ function accUpdateMenu() {
 // Beim Start prüfen, ob der Account noch existiert (der Support
 // könnte ihn inzwischen umbenannt oder gelöscht haben)
 if (account && fdb) {
+    presenceStart();
     fdb.ref("users/" + account.uid).get().then(snap => {
         const user = snap.val();
         if (!user) {
+            presenceStop(true);
             account = null;
             localStorage.removeItem("account");
             accUpdateMenu();
@@ -2469,6 +2474,7 @@ if (account && fdb) {
             account.hasRecovery = !!user.hasRecovery;
             localStorage.setItem("account", JSON.stringify(account));
             accUpdateMenu();
+            presenceStart(); // Name/Handle im Status-Eintrag aktualisieren
         }
         // Passwort noch nicht verschlüsselt? -> zum Neu-Einloggen auffordern
         maybeShowPwEncWarning(!!user.hasPwEnc);
@@ -2480,6 +2486,55 @@ function mpGetName() {
     // Nickname ohne @, echter Accountname mit @ (so kann niemand
     // einen echten @Namen als Nickname faken)
     return account.nick ? account.nick : "@" + account.handle;
+}
+
+// ---------- Globale Präsenz: wer ist gerade online? ----------
+//
+// Jeder eingeloggte Spieler steht unter /status/<uid> in der Datenbank:
+//   { online, name, handle, lastSeen }
+// Bei Verbindungsabbruch (Tab zu, WLAN weg, Handy aus ...) setzt der
+// Firebase-Server selbst online:false + lastSeen (onDisconnect). Der
+// Betreiber sieht so in der Console live, wer gerade im Spiel ist.
+
+let presConnRef = null; // Listener auf .info/connected
+
+function presenceStart() {
+    if (!fdb || !account) return;
+    if (presConnRef) { presConnRef.off(); presConnRef = null; }
+    const ref = fdb.ref("status/" + account.uid);
+    presConnRef = fdb.ref(".info/connected");
+    presConnRef.on("value", s => {
+        if (!s.val() || !account) return;
+        // Erst das onDisconnect scharf stellen, DANN online melden – so
+        // bleibt kein "online"-Eintrag hängen, wenn die Verbindung gleich
+        // wieder abreißt.
+        ref.onDisconnect().update({
+            online: false,
+            lastSeen: firebase.database.ServerValue.TIMESTAMP
+        });
+        ref.update({
+            online: true,
+            name: mpGetName(),
+            handle: "@" + account.handle,
+            lastSeen: firebase.database.ServerValue.TIMESTAMP
+        });
+    });
+}
+
+// removeEntry=true, wenn der Account nicht mehr existiert (Eintrag ganz weg)
+function presenceStop(removeEntry) {
+    if (presConnRef) { presConnRef.off(); presConnRef = null; }
+    if (!fdb || !account) return;
+    const ref = fdb.ref("status/" + account.uid);
+    ref.onDisconnect().cancel().catch(() => {});
+    if (removeEntry) {
+        ref.remove().catch(() => {});
+    } else {
+        ref.update({
+            online: false,
+            lastSeen: firebase.database.ServerValue.TIMESTAMP
+        }).catch(() => {});
+    }
 }
 
 // ---------- Anzeigename (Nickname) ändern ----------
@@ -2514,6 +2569,7 @@ document.getElementById("btnNickSave").addEventListener("click", async () => {
         account.nick = nick || null;
         localStorage.setItem("account", JSON.stringify(account));
         accUpdateMenu();
+        fdb.ref("status/" + account.uid + "/name").set(mpGetName()).catch(() => {});
         status.innerText = nick
             ? '✅ Gespeichert! Du heißt jetzt "' + nick + '".'
             : "✅ Anzeigename entfernt – du heißt wieder @" + account.handle + ".";
