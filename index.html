@@ -1129,6 +1129,30 @@ body.mp-active .save-buttons {
 .blk-h { color: #888; font-size: 14px; margin: 20px 0 4px; text-align: left; }
 .drawer-status { color: #ffd400; font-size: 14px; min-height: 20px; margin-top: 10px; text-align: center; }
 
+/* Beitritts-Status wählen (drei Pillen) */
+.joinpref-btns { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.joinpref-btns button {
+    background: #202020;
+    border: 1px solid #333;
+    color: #bbb;
+    border-radius: 8px;
+    padding: 9px 12px;
+    cursor: pointer;
+    font-size: 14px;
+    text-align: left;
+    transition: .15s;
+}
+.joinpref-btns button:hover { background: #282828; }
+.joinpref-btns button.active {
+    color: #fff;
+    background: #06351b;
+    border-color: #00ff66;
+}
+/* Beitreten-Button in der Freundeszeile */
+.friend-row .fr-btn.join { border-color: #35b7ff; color: #9bd9ff; }
+.friend-row .fr-btn.join:hover { background: #06263a; }
+.fr-dnd { color: #888; font-size: 12px; flex-shrink: 0; }
+
 .menu-btn.small {
     font-size: 15px;
     padding: 10px 12px;
@@ -1163,6 +1187,13 @@ body.mp-active .save-buttons {
             <code id="drawerCode">…</code>
             <button id="btnCopyFc" title="Kopieren">📋</button>
         </div>
+
+        <span class="fc-label" style="margin-top:14px">Wenn du in einer Lobby bist, dürfen Freunde…</span>
+        <div class="joinpref-btns">
+            <button data-pref="dnd">🔕 Bitte nicht stören</button>
+            <button data-pref="ask">🙋 Frag mich</button>
+            <button data-pref="open">➜ Tritt mir bei</button>
+        </div>
     </div>
 
     <div class="drawer-tabs">
@@ -1177,7 +1208,10 @@ body.mp-active .save-buttons {
         </div>
 
         <div class="tab-pane" data-pane="requests" hidden>
+            <h3 class="blk-h" style="margin-top:0">👥 Freundschafts-Anfragen</h3>
             <div id="reqList"></div>
+            <h3 class="blk-h">🚪 Möchten deiner Lobby beitreten</h3>
+            <div id="joinReqList"></div>
             <h3 class="blk-h">🚫 Blockiert</h3>
             <div id="blockList"></div>
         </div>
@@ -2560,11 +2594,11 @@ async function accLogin(handle, pass) {
     // Kopie automatisch – sobald sie sich das nächste Mal einloggen.
     await accStorePwEnc(uid, pass);
 
-    accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery);
+    accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery, user.joinPref);
 }
 
-function accLoggedIn(uid, handle, nick, hasRecovery) {
-    account = { uid: uid, handle: handle, nick: nick || null, hasRecovery: !!hasRecovery };
+function accLoggedIn(uid, handle, nick, hasRecovery, joinPref) {
+    account = { uid: uid, handle: handle, nick: nick || null, hasRecovery: !!hasRecovery, joinPref: joinPref || "ask" };
     localStorage.setItem("account", JSON.stringify(account));
     presenceStart();
     friendsInit();
@@ -2782,6 +2816,11 @@ function accUpdateMenu() {
 
 let presConnRef = null; // Listener auf .info/connected
 
+// Beitritts-Status: dürfen Freunde in meine Lobby? "dnd" | "ask" | "open"
+function myJoinPref() {
+    return (account && account.joinPref) || "ask";
+}
+
 function presenceStart() {
     if (!fdb || !account) return;
     if (presConnRef) { presConnRef.off(); presConnRef = null; }
@@ -2794,15 +2833,24 @@ function presenceStart() {
         // wieder abreißt.
         ref.onDisconnect().update({
             online: false,
+            lobby: null,
             lastSeen: firebase.database.ServerValue.TIMESTAMP
         });
         ref.update({
             online: true,
             name: mpGetName(),
             handle: "@" + account.handle,
+            joinPref: myJoinPref(),
+            lobby: mpLobbyCode || null,
             lastSeen: firebase.database.ServerValue.TIMESTAMP
         });
     });
+}
+
+// Aktuelle Lobby im eigenen Status hinterlegen (für "Freund beitreten")
+function presenceSetLobby(code) {
+    if (!fdb || !account) return;
+    fdb.ref("status/" + account.uid + "/lobby").set(code || null).catch(() => {});
 }
 
 // removeEntry=true, wenn der Account nicht mehr existiert (Eintrag ganz weg)
@@ -2833,16 +2881,22 @@ if (account && fdb) {
             account = null;
             localStorage.removeItem("account");
             accUpdateMenu();
-        } else if (user.handle !== account.handle || (user.nick || null) !== (account.nick || null) || !!user.hasRecovery !== !!account.hasRecovery) {
+        } else {
+            const changed = user.handle !== account.handle || (user.nick || null) !== (account.nick || null)
+                || !!user.hasRecovery !== !!account.hasRecovery || (user.joinPref || "ask") !== account.joinPref;
             account.handle = user.handle;
             account.nick = user.nick || null;
             account.hasRecovery = !!user.hasRecovery;
-            localStorage.setItem("account", JSON.stringify(account));
-            accUpdateMenu();
-            presenceStart(); // Name/Handle im Status-Eintrag aktualisieren
+            account.joinPref = user.joinPref || "ask";
+            if (changed) {
+                localStorage.setItem("account", JSON.stringify(account));
+                accUpdateMenu();
+                presenceStart(); // Name/Handle/Beitritts-Status aktualisieren
+                friendRenderJoinPref();
+            }
         }
         // Passwort noch nicht verschlüsselt? -> zum Neu-Einloggen auffordern
-        maybeShowPwEncWarning(!!user.hasPwEnc);
+        maybeShowPwEncWarning(!!(user && user.hasPwEnc));
     }).catch(() => {});
 }
 
@@ -2864,8 +2918,8 @@ function mpGetName() {
 // Kein echtes Auth -> wie der Rest des Spiels vertrauensbasiert.
 
 const FRIEND_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-let friendState = { friends: {}, requests: {}, blocks: {}, status: {}, usersCache: null };
-let friendRefs = { friends: null, requests: null, blocks: null, status: null };
+let friendState = { friends: {}, requests: {}, blocks: {}, status: {}, joinReqs: {}, usersCache: null };
+let friendRefs = { friends: null, requests: null, blocks: null, status: null, joinReq: null, joinResp: null };
 
 function friendGenCode() {
     let c = "";
@@ -2930,26 +2984,31 @@ function friendsInit() {
     friendRefs.requests = fdb.ref("friendReq/" + uid);
     friendRefs.blocks = fdb.ref("friendBlocks/" + uid);
     friendRefs.status = fdb.ref("status");
+    friendRefs.joinReq = fdb.ref("joinReq/" + uid);
+    friendRefs.joinResp = fdb.ref("joinResp/" + uid);
     friendRefs.friends.on("value", s => { friendState.friends = s.val() || {}; friendRenderFriends(); });
     friendRefs.requests.on("value", s => { friendState.requests = s.val() || {}; friendRenderRequests(); friendUpdateBadge(); });
     friendRefs.blocks.on("value", s => { friendState.blocks = s.val() || {}; friendRenderBlocks(); });
     friendRefs.status.on("value", s => { friendState.status = s.val() || {}; friendRenderFriends(); });
+    friendRefs.joinReq.on("value", s => { friendState.joinReqs = s.val() || {}; friendRenderJoinReqs(); friendUpdateBadge(); });
+    friendRefs.joinResp.on("value", s => joinHandleResponse(s.val()));
     friendEnsureCode();
     friendRenderProfile();
+    friendRenderJoinPref();
 }
 function friendsTeardown(keepState) {
-    for (const k of ["friends", "requests", "blocks", "status"]) {
+    for (const k of ["friends", "requests", "blocks", "status", "joinReq", "joinResp"]) {
         if (friendRefs[k]) { friendRefs[k].off(); friendRefs[k] = null; }
     }
     if (!keepState) {
-        friendState = { friends: {}, requests: {}, blocks: {}, status: {}, usersCache: null };
+        friendState = { friends: {}, requests: {}, blocks: {}, status: {}, joinReqs: {}, usersCache: null };
         closeDrawer();
     }
     friendUpdateHamburger();
     friendUpdateBadge();
 }
 function friendUpdateBadge() {
-    const n = Object.keys(friendState.requests || {}).length;
+    const n = Object.keys(friendState.requests || {}).length + Object.keys(friendState.joinReqs || {}).length;
     const badge = document.getElementById("reqBadge");
     const dot = document.getElementById("drawerDot");
     if (badge) { badge.hidden = n === 0; badge.innerText = n; }
@@ -2987,14 +3046,19 @@ function friendRenderProfile() {
 }
 function friendRenderAll() {
     friendRenderProfile();
+    friendRenderJoinPref();
     friendRenderFriends();
     friendRenderRequests();
+    friendRenderJoinReqs();
     friendRenderBlocks();
     friendUpdateBadge();
 }
 function friendIsOnline(uid) {
     const s = friendState.status && friendState.status[uid];
     return !!(s && s.online);
+}
+function friendStatusOf(uid) {
+    return (friendState.status && friendState.status[uid]) || {};
 }
 function friendMakeRow(uid, name, handle, opts) {
     const row = document.createElement("div");
@@ -3010,6 +3074,14 @@ function friendMakeRow(uid, name, handle, opts) {
     nm.innerHTML = escapeHtml(name || handle || "Spieler") + devBadgeHtml(uid);
     row.appendChild(nm);
     for (const b of (opts.btns || [])) {
+        if (b.chip) {
+            const chip = document.createElement("span");
+            chip.className = "fr-dnd";
+            chip.innerText = b.label;
+            if (b.title) chip.title = b.title;
+            row.appendChild(chip);
+            continue;
+        }
         const btn = document.createElement("button");
         btn.className = "fr-btn" + (b.cls ? " " + b.cls : "");
         btn.innerText = b.label;
@@ -3018,6 +3090,15 @@ function friendMakeRow(uid, name, handle, opts) {
         row.appendChild(btn);
     }
     return row;
+}
+// Beitreten-Button je nach Beitritts-Status des Freundes
+function friendJoinButton(uid) {
+    const st = friendStatusOf(uid);
+    if (!st.online || !st.lobby) return null; // nicht in einer Lobby -> nichts
+    const pref = st.joinPref || "ask";
+    if (pref === "open") return { label: "➜ Beitreten", cls: "join", title: "Direkt beitreten", fn: () => joinDirect(st.lobby) };
+    if (pref === "ask") return { label: "🙋 Anfragen", cls: "join", title: "Um Beitritt bitten", fn: () => joinRequest(uid) };
+    return { label: "🔕", chip: true, title: "Bitte nicht stören" }; // dnd
 }
 function friendRenderFriends() {
     const box = document.getElementById("friendsList");
@@ -3031,14 +3112,91 @@ function friendRenderFriends() {
     }
     for (const uid of ids) {
         const f = friendState.friends[uid] || {};
-        box.appendChild(friendMakeRow(uid, f.name, f.handle, {
-            dot: true,
+        const btns = [];
+        const jb = friendJoinButton(uid);
+        if (jb) btns.push(jb);
+        btns.push({ label: "🚫", cls: "no", title: "Blockieren", fn: () => friendBlock(uid, f.name, f.handle) });
+        btns.push({ label: "✕", cls: "no", title: "Freund entfernen", fn: () => friendRemove(uid) });
+        box.appendChild(friendMakeRow(uid, f.name, f.handle, { dot: true, btns: btns }));
+    }
+}
+// ----- Beitritts-Anfragen (jemand will in MEINE Lobby) -----
+function friendRenderJoinReqs() {
+    const box = document.getElementById("joinReqList");
+    if (!box) return;
+    box.innerHTML = "";
+    const ids = Object.keys(friendState.joinReqs || {});
+    if (ids.length === 0) {
+        box.innerHTML = '<div class="drawer-empty">Keine Beitritts-Anfragen.</div>';
+        return;
+    }
+    for (const uid of ids) {
+        const r = friendState.joinReqs[uid] || {};
+        box.appendChild(friendMakeRow(uid, r.name, r.handle, {
             btns: [
-                { label: "🚫", cls: "no", title: "Blockieren", fn: () => friendBlock(uid, f.name, f.handle) },
-                { label: "✕", cls: "no", title: "Freund entfernen", fn: () => friendRemove(uid) }
+                { label: "✔ Reinlassen", cls: "ok", fn: () => joinApprove(uid) },
+                { label: "✕", cls: "no", title: "Ablehnen", fn: () => joinDeclineReq(uid) }
             ]
         }));
     }
+}
+// ----- Beitritts-Status wählen -----
+function friendRenderJoinPref() {
+    const cur = myJoinPref();
+    for (const b of document.querySelectorAll(".joinpref-btns button")) {
+        b.classList.toggle("active", b.dataset.pref === cur);
+    }
+}
+async function friendSetJoinPref(pref) {
+    if (!account || !fdb) return;
+    if (!["dnd", "ask", "open"].includes(pref)) return;
+    account.joinPref = pref;
+    localStorage.setItem("account", JSON.stringify(account));
+    friendRenderJoinPref();
+    try {
+        await fdb.ref("users/" + account.uid + "/joinPref").set(pref);
+        await fdb.ref("status/" + account.uid + "/joinPref").set(pref);
+    } catch (e) {}
+}
+// ----- Join-Aktionen -----
+function joinDirect(code) {
+    if (!code) return;
+    if (mpRole || mpBusy) { drawerStatus("Verlasse erst deine aktuelle Lobby."); return; }
+    closeDrawer();
+    setMenuStatus("");
+    mpJoin(code, setMenuStatus);
+}
+async function joinRequest(targetUid) {
+    if (!account || !fdb) return;
+    const st = friendStatusOf(targetUid);
+    if (!st.online || !st.lobby) { drawerStatus("Freund ist gerade in keiner Lobby."); return; }
+    try {
+        await fdb.ref("joinReq/" + targetUid + "/" + account.uid).set({ name: mpGetName(), handle: "@" + account.handle, time: mpNow() });
+        drawerStatus("🙋 Beitritts-Anfrage gesendet!");
+    } catch (e) { drawerStatus(mpFriendlyError(e)); }
+}
+async function joinApprove(reqUid) {
+    if (!account || !fdb) return;
+    if (!mpLobbyCode) { drawerStatus("Du bist selbst in keiner Lobby."); await joinDeclineReq(reqUid); return; }
+    try {
+        await fdb.ref("joinResp/" + reqUid).set({ code: mpLobbyCode, fromName: mpGetName(), time: mpNow() });
+        await fdb.ref("joinReq/" + account.uid + "/" + reqUid).remove().catch(() => {});
+        drawerStatus("✅ Reingelassen!");
+    } catch (e) { drawerStatus(mpFriendlyError(e)); }
+}
+async function joinDeclineReq(reqUid) {
+    if (!account || !fdb) return;
+    try { await fdb.ref("joinReq/" + account.uid + "/" + reqUid).remove(); } catch (e) {}
+}
+// Antwort auf meine Beitritts-Anfrage -> automatisch der Lobby beitreten
+function joinHandleResponse(resp) {
+    if (!resp || !resp.code || !account) return;
+    fdb.ref("joinResp/" + account.uid).remove().catch(() => {});
+    if (mpNow() - (resp.time || 0) > 60000) return; // veraltet
+    if (mpRole || mpBusy) return; // schon in einer Lobby
+    closeDrawer();
+    setMenuStatus("✅ " + (resp.fromName || "Dein Freund") + " lässt dich rein…");
+    mpJoin(resp.code, setMenuStatus);
 }
 function friendRenderRequests() {
     const box = document.getElementById("reqList");
@@ -3189,6 +3347,9 @@ document.getElementById("btnDrawerClose").addEventListener("click", closeDrawer)
 document.getElementById("drawerOverlay").addEventListener("click", closeDrawer);
 for (const b of document.querySelectorAll(".drawer-tabs button")) {
     b.addEventListener("click", () => drawerSetTab(b.dataset.tab));
+}
+for (const b of document.querySelectorAll(".joinpref-btns button")) {
+    b.addEventListener("click", () => friendSetJoinPref(b.dataset.pref));
 }
 document.getElementById("btnFcAdd").addEventListener("click", friendAddByCode);
 document.getElementById("fcInput").addEventListener("keydown", e => { if (e.key === "Enter") friendAddByCode(); });
@@ -3477,6 +3638,9 @@ function mpEnterLobby(code, role) {
     mpPrevStatus = null;
     mpLobbyData = null;
     mpRef = fdb.ref("lobbies/" + code);
+
+    // Freunde sehen jetzt, dass ich in dieser Lobby bin
+    presenceSetLobby(code);
 
     // Session merken, damit ein Reload NICHT aus der Lobby wirft
     sessionStorage.setItem("mpSession", JSON.stringify({ code: code, id: mpMyId }));
@@ -4407,6 +4571,9 @@ document.getElementById("btnResultsLeave").addEventListener("click", mpLeaveLobb
 
 function mpCleanup() {
     mpLeaving = true;
+
+    // Freunden zeigen, dass ich in keiner Lobby mehr bin
+    presenceSetLobby(null);
 
     clearInterval(mpGame.timerInt);
     clearTimeout(mpGame.endTimeout);
