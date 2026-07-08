@@ -931,6 +931,204 @@ body.mp-active .save-buttons {
     user-select: none;
 }
 
+/* ============ Profil- & Freunde-Drawer ============ */
+
+/* Hamburger-Button oben links */
+#btnDrawer {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 350;
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    background: #222;
+    border: 1px solid #444;
+    border-radius: 11px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 5px;
+}
+#btnDrawer:hover { background: #333; }
+#btnDrawer span {
+    display: block;
+    width: 22px;
+    height: 2.5px;
+    background: #fff;
+    border-radius: 2px;
+    transition: transform .3s, opacity .2s;
+}
+/* Beim Öffnen zum X animieren */
+#btnDrawer.open span:nth-child(1) { transform: translateY(7.5px) rotate(45deg); }
+#btnDrawer.open span:nth-child(2) { opacity: 0; }
+#btnDrawer.open span:nth-child(3) { transform: translateY(-7.5px) rotate(-45deg); }
+
+/* Roter Punkt bei offenen Anfragen */
+#drawerDot {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 12px;
+    height: 12px;
+    background: #ee2244;
+    border: 2px solid #1b1b1b;
+    border-radius: 50%;
+}
+
+/* Abdunkelnder Hintergrund */
+#drawerOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .55);
+    z-index: 360;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .3s;
+}
+#drawerOverlay.show { opacity: 1; pointer-events: auto; }
+
+/* Der Drawer selbst – schiebt von links rein */
+#drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 350px;
+    max-width: 88vw;
+    background: #181818;
+    border-right: 1px solid #333;
+    box-shadow: 5px 0 26px rgba(0, 0, 0, .55);
+    z-index: 370;
+    transform: translateX(-100%);
+    transition: transform .3s ease;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+#drawer.open { transform: translateX(0); }
+
+.drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 15px 16px;
+    border-bottom: 1px solid #2a2a2a;
+}
+.drawer-head h2 { margin: 0; font-size: 21px; }
+#btnDrawerClose {
+    background: none;
+    border: none;
+    color: #aaa;
+    font-size: 22px;
+    cursor: pointer;
+    line-height: 1;
+}
+#btnDrawerClose:hover { color: #fff; }
+
+.drawer-profile { padding: 14px 16px; border-bottom: 1px solid #2a2a2a; }
+.drawer-name { font-size: 17px; margin-bottom: 12px; word-break: break-word; }
+.fc-label { display: block; color: #888; font-size: 12px; margin-bottom: 5px; }
+.fc-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #111;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+.fc-box code {
+    flex: 1;
+    font-size: 19px;
+    letter-spacing: 2px;
+    color: #00ff66;
+    font-family: Consolas, monospace;
+}
+.fc-box button, .fc-add button {
+    background: #222;
+    border: 1px solid #444;
+    color: #fff;
+    border-radius: 6px;
+    padding: 7px 11px;
+    cursor: pointer;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+.fc-box button:hover, .fc-add button:hover { background: #333; }
+
+.drawer-tabs { display: flex; border-bottom: 1px solid #2a2a2a; }
+.drawer-tabs button {
+    flex: 1;
+    background: none;
+    border: none;
+    color: #999;
+    padding: 12px 4px;
+    cursor: pointer;
+    font-size: 14px;
+    border-bottom: 2px solid transparent;
+}
+.drawer-tabs button.active { color: #fff; border-bottom-color: #00ff66; }
+.req-badge {
+    background: #ee2244;
+    color: #fff;
+    border-radius: 999px;
+    font-size: 11px;
+    padding: 1px 6px;
+    margin-left: 3px;
+}
+
+.drawer-body { flex: 1; overflow-y: auto; padding: 14px 16px; }
+.drawer-body label { display: block; color: #888; font-size: 12px; margin: 12px 0 5px; text-align: left; }
+.drawer-body label:first-child { margin-top: 0; }
+
+.fc-add { display: flex; gap: 8px; }
+.fc-add input {
+    flex: 1;
+    min-width: 0;
+    background: #111;
+    color: #fff;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 15px;
+    box-sizing: border-box;
+}
+#fcInput { text-transform: uppercase; letter-spacing: 3px; text-align: center; }
+
+.friend-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    background: #202020;
+    border: 1px solid #2f2f2f;
+    border-radius: 9px;
+    padding: 9px 11px;
+    margin: 8px 0;
+}
+.friend-row .fr-name { flex: 1; font-size: 15px; word-break: break-word; }
+.fr-dot { width: 9px; height: 9px; border-radius: 50%; background: #555; flex-shrink: 0; }
+.fr-dot.on { background: #00ff66; box-shadow: 0 0 6px #00ff66; }
+.friend-row .fr-btn {
+    background: #2a2a2a;
+    border: 1px solid #444;
+    color: #ddd;
+    border-radius: 6px;
+    padding: 6px 9px;
+    cursor: pointer;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.friend-row .fr-btn.ok { border-color: #00ff66; color: #8f9; }
+.friend-row .fr-btn.ok:hover { background: #06351b; }
+.friend-row .fr-btn.no:hover { background: #400; border-color: #f55; color: #fcc; }
+
+.drawer-empty { color: #666; text-align: center; padding: 22px 6px; font-size: 14px; }
+.blk-h { color: #888; font-size: 14px; margin: 20px 0 4px; text-align: left; }
+.drawer-status { color: #ffd400; font-size: 14px; min-height: 20px; margin-top: 10px; text-align: center; }
+
 .menu-btn.small {
     font-size: 15px;
     padding: 10px 12px;
@@ -945,6 +1143,61 @@ body.mp-active .save-buttons {
 
 <!-- Eingeloggter Account, dezent unten rechts -->
 <div id="accountTag" hidden></div>
+
+<!-- =============== PROFIL- & FREUNDE-DRAWER =============== -->
+<button id="btnDrawer" aria-label="Profil & Freunde" hidden>
+    <span></span><span></span><span></span>
+    <span id="drawerDot" hidden></span>
+</button>
+<div id="drawerOverlay"></div>
+<aside id="drawer">
+    <div class="drawer-head">
+        <h2>👤 Profil</h2>
+        <button id="btnDrawerClose" aria-label="Schließen">✕</button>
+    </div>
+
+    <div class="drawer-profile">
+        <div id="drawerName" class="drawer-name"></div>
+        <span class="fc-label">Dein Freundes-Code (den kannst du teilen)</span>
+        <div class="fc-box">
+            <code id="drawerCode">…</code>
+            <button id="btnCopyFc" title="Kopieren">📋</button>
+        </div>
+    </div>
+
+    <div class="drawer-tabs">
+        <button data-tab="friends" class="active">Freunde</button>
+        <button data-tab="requests">Anfragen<span id="reqBadge" class="req-badge" hidden>0</span></button>
+        <button data-tab="add">Hinzufügen</button>
+    </div>
+
+    <div class="drawer-body">
+        <div class="tab-pane" data-pane="friends">
+            <div id="friendsList"></div>
+        </div>
+
+        <div class="tab-pane" data-pane="requests" hidden>
+            <div id="reqList"></div>
+            <h3 class="blk-h">🚫 Blockiert</h3>
+            <div id="blockList"></div>
+        </div>
+
+        <div class="tab-pane" data-pane="add" hidden>
+            <label>Per Freundes-Code hinzufügen</label>
+            <div class="fc-add">
+                <input id="fcInput" maxlength="7" placeholder="ABC-123">
+                <button id="btnFcAdd">Senden</button>
+            </div>
+            <label>Nach Name suchen</label>
+            <div class="fc-add">
+                <input id="searchInput" maxlength="16" placeholder="@name oder Anzeigename">
+                <button id="btnSearch">Suchen</button>
+            </div>
+            <div id="searchResults"></div>
+            <div id="drawerStatus" class="drawer-status"></div>
+        </div>
+    </div>
+</aside>
 
 <!-- Vollbild-Warnung: Account noch ohne Passwort-Verschlüsselung -->
 <div id="pwencWarn" hidden>
@@ -2051,6 +2304,7 @@ function showScreen(id) {
     for (const s of ["screenLogin", "screenMenu", "screenRecovery", "screenNick", "screenRequest", "screenBrowser", "screenLobby", "screenResults", "screenGame"]) {
         document.getElementById(s).hidden = (s !== id);
     }
+    if (typeof friendUpdateHamburger === "function") friendUpdateHamburger();
 }
 
 function setMenuStatus(text) {
@@ -2313,6 +2567,7 @@ function accLoggedIn(uid, handle, nick, hasRecovery) {
     account = { uid: uid, handle: handle, nick: nick || null, hasRecovery: !!hasRecovery };
     localStorage.setItem("account", JSON.stringify(account));
     presenceStart();
+    friendsInit();
     // Frischer Login/Registrierung -> Passwort wird gerade verschlüsselt,
     // also keine Warnung mehr nötig.
     document.getElementById("pwencWarn").hidden = true;
@@ -2358,6 +2613,7 @@ document.getElementById("btnGoLogin").addEventListener("click", () => {
 
 document.getElementById("btnLogout").addEventListener("click", () => {
     presenceStop();
+    friendsTeardown();
     account = null;
     localStorage.removeItem("account");
     localStorage.removeItem("guestMode");
@@ -2382,6 +2638,7 @@ function maybeShowPwEncWarning(hasPwEnc) {
 document.getElementById("btnPwencRelogin").addEventListener("click", () => {
     const h = account ? account.handle : "";
     presenceStop();
+    friendsTeardown();
     account = null;
     localStorage.removeItem("account");
     sessionStorage.removeItem("pwencSnooze");
@@ -2508,6 +2765,9 @@ function accUpdateMenu() {
     document.getElementById("btnMakeRecovery").hidden = !account || !!account.hasRecovery;
     document.getElementById("btnChangeRequest").hidden = !account;
     document.getElementById("btnLogout").hidden = !account;
+
+    friendUpdateHamburger();
+    friendUpdateBadge();
 }
 
 // ---------- Globale Präsenz: wer ist gerade online? ----------
@@ -2569,6 +2829,7 @@ if (account && fdb) {
         const user = snap.val();
         if (!user) {
             presenceStop(true);
+            friendsTeardown();
             account = null;
             localStorage.removeItem("account");
             accUpdateMenu();
@@ -2591,6 +2852,356 @@ function mpGetName() {
     // einen echten @Namen als Nickname faken)
     return account.nick ? account.nick : "@" + account.handle;
 }
+
+// ========== Profil & Freunde (Drawer) ==========
+//
+// Datenbank-Struktur:
+//   users/<uid>/friendCode      – eigener Code (einmal erzeugt)
+//   friendCodes/<CODE>          – Code -> uid (write-once, für Suche)
+//   friends/<uid>/<other>       – { name, handle, since } (beidseitig)
+//   friendReq/<to>/<from>       – { name, handle, time } (Eingang)
+//   friendBlocks/<uid>/<other>  – { name, handle } (wer geblockt ist)
+// Kein echtes Auth -> wie der Rest des Spiels vertrauensbasiert.
+
+const FRIEND_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+let friendState = { friends: {}, requests: {}, blocks: {}, status: {}, usersCache: null };
+let friendRefs = { friends: null, requests: null, blocks: null, status: null };
+
+function friendGenCode() {
+    let c = "";
+    for (let i = 0; i < 6; i++) c += FRIEND_CODE_CHARS[Math.floor(Math.random() * FRIEND_CODE_CHARS.length)];
+    return c;
+}
+function friendNormCode(s) {
+    return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+}
+function friendCodeDisplay(code) {
+    const n = friendNormCode(code);
+    return n.length === 6 ? n.slice(0, 3) + "-" + n.slice(3) : n;
+}
+function drawerStatus(msg) {
+    const el = document.getElementById("drawerStatus");
+    if (el) el.innerText = msg || "";
+}
+
+// ----- Öffnen / Schließen / Tabs -----
+function openDrawer() {
+    if (!account) return;
+    document.getElementById("drawerOverlay").classList.add("show");
+    document.getElementById("drawer").classList.add("open");
+    document.getElementById("btnDrawer").classList.add("open");
+    friendLoadUsers();
+    friendRenderAll();
+}
+function closeDrawer() {
+    const ov = document.getElementById("drawerOverlay");
+    const dr = document.getElementById("drawer");
+    const bt = document.getElementById("btnDrawer");
+    if (ov) ov.classList.remove("show");
+    if (dr) dr.classList.remove("open");
+    if (bt) bt.classList.remove("open");
+    drawerStatus("");
+}
+function drawerSetTab(tab) {
+    for (const b of document.querySelectorAll(".drawer-tabs button")) {
+        b.classList.toggle("active", b.dataset.tab === tab);
+    }
+    for (const p of document.querySelectorAll(".tab-pane")) {
+        p.hidden = p.dataset.pane !== tab;
+    }
+}
+
+// ----- Sichtbarkeit des Hamburgers (nicht im laufenden Spiel) -----
+function friendUpdateHamburger() {
+    const b = document.getElementById("btnDrawer");
+    if (!b) return;
+    const gameEl = document.getElementById("screenGame");
+    const inGame = gameEl && !gameEl.hidden;
+    b.hidden = !account || inGame;
+}
+
+// ----- Listener an-/abmelden -----
+function friendsInit() {
+    friendUpdateHamburger();
+    if (!fdb || !account) return;
+    friendsTeardown(true); // evtl. alte Listener lösen, State behalten
+    const uid = account.uid;
+    friendRefs.friends = fdb.ref("friends/" + uid);
+    friendRefs.requests = fdb.ref("friendReq/" + uid);
+    friendRefs.blocks = fdb.ref("friendBlocks/" + uid);
+    friendRefs.status = fdb.ref("status");
+    friendRefs.friends.on("value", s => { friendState.friends = s.val() || {}; friendRenderFriends(); });
+    friendRefs.requests.on("value", s => { friendState.requests = s.val() || {}; friendRenderRequests(); friendUpdateBadge(); });
+    friendRefs.blocks.on("value", s => { friendState.blocks = s.val() || {}; friendRenderBlocks(); });
+    friendRefs.status.on("value", s => { friendState.status = s.val() || {}; friendRenderFriends(); });
+    friendEnsureCode();
+    friendRenderProfile();
+}
+function friendsTeardown(keepState) {
+    for (const k of ["friends", "requests", "blocks", "status"]) {
+        if (friendRefs[k]) { friendRefs[k].off(); friendRefs[k] = null; }
+    }
+    if (!keepState) {
+        friendState = { friends: {}, requests: {}, blocks: {}, status: {}, usersCache: null };
+        closeDrawer();
+    }
+    friendUpdateHamburger();
+    friendUpdateBadge();
+}
+function friendUpdateBadge() {
+    const n = Object.keys(friendState.requests || {}).length;
+    const badge = document.getElementById("reqBadge");
+    const dot = document.getElementById("drawerDot");
+    if (badge) { badge.hidden = n === 0; badge.innerText = n; }
+    if (dot) dot.hidden = n === 0 || !account;
+}
+
+// ----- Eigenen Freundes-Code sicherstellen -----
+async function friendEnsureCode() {
+    if (!account || !fdb) return;
+    if (account.friendCode) { friendRenderProfile(); return; }
+    try {
+        let code = (await fdb.ref("users/" + account.uid + "/friendCode").get()).val();
+        for (let t = 0; t < 6 && !code; t++) {
+            const cand = friendGenCode();
+            const claim = await fdb.ref("friendCodes/" + cand).transaction(cur => (cur === null ? account.uid : undefined));
+            if (claim.committed && claim.snapshot.val() === account.uid) {
+                await fdb.ref("users/" + account.uid + "/friendCode").set(cand);
+                code = cand;
+            }
+        }
+        if (code) {
+            account.friendCode = code;
+            localStorage.setItem("account", JSON.stringify(account));
+            friendRenderProfile();
+        }
+    } catch (e) {}
+}
+
+// ----- Rendern -----
+function friendRenderProfile() {
+    const nameEl = document.getElementById("drawerName");
+    const codeEl = document.getElementById("drawerCode");
+    if (nameEl && account) nameEl.innerHTML = escapeHtml("👤 " + mpGetName()) + devBadgeHtml(account.uid);
+    if (codeEl) codeEl.innerText = (account && account.friendCode) ? friendCodeDisplay(account.friendCode) : "…";
+}
+function friendRenderAll() {
+    friendRenderProfile();
+    friendRenderFriends();
+    friendRenderRequests();
+    friendRenderBlocks();
+    friendUpdateBadge();
+}
+function friendIsOnline(uid) {
+    const s = friendState.status && friendState.status[uid];
+    return !!(s && s.online);
+}
+function friendMakeRow(uid, name, handle, opts) {
+    const row = document.createElement("div");
+    row.className = "friend-row";
+    if (opts.dot) {
+        const dot = document.createElement("span");
+        dot.className = "fr-dot" + (friendIsOnline(uid) ? " on" : "");
+        dot.title = friendIsOnline(uid) ? "online" : "offline";
+        row.appendChild(dot);
+    }
+    const nm = document.createElement("span");
+    nm.className = "fr-name";
+    nm.innerHTML = escapeHtml(name || handle || "Spieler") + devBadgeHtml(uid);
+    row.appendChild(nm);
+    for (const b of (opts.btns || [])) {
+        const btn = document.createElement("button");
+        btn.className = "fr-btn" + (b.cls ? " " + b.cls : "");
+        btn.innerText = b.label;
+        if (b.title) btn.title = b.title;
+        btn.addEventListener("click", b.fn);
+        row.appendChild(btn);
+    }
+    return row;
+}
+function friendRenderFriends() {
+    const box = document.getElementById("friendsList");
+    if (!box) return;
+    box.innerHTML = "";
+    const ids = Object.keys(friendState.friends || {});
+    ids.sort((a, b) => (friendIsOnline(b) ? 1 : 0) - (friendIsOnline(a) ? 1 : 0));
+    if (ids.length === 0) {
+        box.innerHTML = '<div class="drawer-empty">Noch keine Freunde – füg wen über „Hinzufügen" hinzu! 👋</div>';
+        return;
+    }
+    for (const uid of ids) {
+        const f = friendState.friends[uid] || {};
+        box.appendChild(friendMakeRow(uid, f.name, f.handle, {
+            dot: true,
+            btns: [
+                { label: "🚫", cls: "no", title: "Blockieren", fn: () => friendBlock(uid, f.name, f.handle) },
+                { label: "✕", cls: "no", title: "Freund entfernen", fn: () => friendRemove(uid) }
+            ]
+        }));
+    }
+}
+function friendRenderRequests() {
+    const box = document.getElementById("reqList");
+    if (!box) return;
+    box.innerHTML = "";
+    const ids = Object.keys(friendState.requests || {});
+    if (ids.length === 0) {
+        box.innerHTML = '<div class="drawer-empty">Keine offenen Anfragen.</div>';
+        return;
+    }
+    for (const uid of ids) {
+        const r = friendState.requests[uid] || {};
+        box.appendChild(friendMakeRow(uid, r.name, r.handle, {
+            btns: [
+                { label: "✔", cls: "ok", title: "Annehmen", fn: () => friendAccept(uid, r) },
+                { label: "✕", cls: "no", title: "Ablehnen", fn: () => friendDecline(uid) },
+                { label: "🚫", cls: "no", title: "Blockieren", fn: () => friendBlock(uid, r.name, r.handle) }
+            ]
+        }));
+    }
+}
+function friendRenderBlocks() {
+    const box = document.getElementById("blockList");
+    if (!box) return;
+    box.innerHTML = "";
+    const ids = Object.keys(friendState.blocks || {});
+    if (ids.length === 0) {
+        box.innerHTML = '<div class="drawer-empty">Niemand blockiert.</div>';
+        return;
+    }
+    for (const uid of ids) {
+        const b = friendState.blocks[uid] || {};
+        box.appendChild(friendMakeRow(uid, b.name, b.handle, {
+            btns: [{ label: "Entsperren", fn: () => friendUnblock(uid) }]
+        }));
+    }
+}
+
+// ----- Aktionen -----
+async function friendAccept(uid, r) {
+    if (!account || !fdb) return;
+    const t = mpNow();
+    try {
+        await fdb.ref("friends/" + account.uid + "/" + uid).set({ name: r.name || null, handle: r.handle || null, since: t });
+        await fdb.ref("friends/" + uid + "/" + account.uid).set({ name: mpGetName(), handle: "@" + account.handle, since: t });
+        await fdb.ref("friendReq/" + account.uid + "/" + uid).remove();
+        await fdb.ref("friendReq/" + uid + "/" + account.uid).remove().catch(() => {});
+        drawerStatus("✅ Freund hinzugefügt!");
+    } catch (e) { drawerStatus(mpFriendlyError(e)); }
+}
+async function friendDecline(uid) {
+    if (!account || !fdb) return;
+    try { await fdb.ref("friendReq/" + account.uid + "/" + uid).remove(); } catch (e) {}
+}
+async function friendRemove(uid) {
+    if (!account || !fdb) return;
+    if (!confirm("Diesen Freund wirklich entfernen?")) return;
+    try {
+        await fdb.ref("friends/" + account.uid + "/" + uid).remove();
+        await fdb.ref("friends/" + uid + "/" + account.uid).remove().catch(() => {});
+    } catch (e) {}
+}
+async function friendBlock(uid, name, handle) {
+    if (!account || !fdb) return;
+    if (!confirm("Diese Person blockieren? Sie kann dir dann keine Anfragen mehr schicken.")) return;
+    try {
+        await fdb.ref("friendBlocks/" + account.uid + "/" + uid).set({ name: name || null, handle: handle || null });
+        await fdb.ref("friendReq/" + account.uid + "/" + uid).remove().catch(() => {});
+        await fdb.ref("friends/" + account.uid + "/" + uid).remove().catch(() => {});
+        await fdb.ref("friends/" + uid + "/" + account.uid).remove().catch(() => {});
+        drawerStatus("🚫 Blockiert.");
+    } catch (e) { drawerStatus(mpFriendlyError(e)); }
+}
+async function friendUnblock(uid) {
+    if (!account || !fdb) return;
+    try { await fdb.ref("friendBlocks/" + account.uid + "/" + uid).remove(); } catch (e) {}
+}
+async function friendSendRequest(targetUid) {
+    if (!account || !fdb) return;
+    if (targetUid === account.uid) { drawerStatus("😅 Das ist dein eigener Code."); return; }
+    if (friendState.friends[targetUid]) { drawerStatus("✅ Ihr seid schon Freunde."); return; }
+    // Hat der andere MIR schon geschrieben? -> direkt annehmen
+    if (friendState.requests[targetUid]) { await friendAccept(targetUid, friendState.requests[targetUid]); return; }
+    if (friendState.blocks[targetUid]) { drawerStatus("Du hast diese Person blockiert – erst entsperren."); return; }
+    try {
+        const blockedByThem = (await fdb.ref("friendBlocks/" + targetUid + "/" + account.uid).get()).val();
+        if (blockedByThem) { drawerStatus("❌ Anfrage nicht möglich."); return; }
+        await fdb.ref("friendReq/" + targetUid + "/" + account.uid).set({ name: mpGetName(), handle: "@" + account.handle, time: mpNow() });
+        drawerStatus("✅ Anfrage gesendet!");
+    } catch (e) { drawerStatus(mpFriendlyError(e)); }
+}
+async function friendAddByCode() {
+    if (!account || !fdb) return;
+    const code = friendNormCode(document.getElementById("fcInput").value);
+    if (code.length !== 6) { drawerStatus("❌ Ein Code hat 6 Zeichen (z. B. ABC-123)."); return; }
+    if (account.friendCode && friendNormCode(account.friendCode) === code) { drawerStatus("😅 Das ist dein eigener Code."); return; }
+    drawerStatus("⏳ Suche…");
+    try {
+        const targetUid = (await fdb.ref("friendCodes/" + code).get()).val();
+        if (!targetUid) { drawerStatus("❌ Kein Spieler mit diesem Code."); return; }
+        await friendSendRequest(targetUid);
+        document.getElementById("fcInput").value = "";
+    } catch (e) { drawerStatus(mpFriendlyError(e)); }
+}
+async function friendLoadUsers() {
+    if (!fdb) return;
+    try { friendState.usersCache = (await fdb.ref("users").get()).val() || {}; } catch (e) {}
+}
+async function friendSearch() {
+    if (!account) return;
+    const q = document.getElementById("searchInput").value.trim().toLowerCase().replace(/^@/, "");
+    const box = document.getElementById("searchResults");
+    box.innerHTML = "";
+    if (q.length < 2) { drawerStatus("❌ Mindestens 2 Zeichen eingeben."); return; }
+    drawerStatus("");
+    if (!friendState.usersCache) await friendLoadUsers();
+    const users = friendState.usersCache || {};
+    const hits = [];
+    for (const uid of Object.keys(users)) {
+        if (uid === account.uid) continue;
+        const u = users[uid] || {};
+        const handle = u.handle || "";
+        const nick = u.nick || "";
+        if (handle.toLowerCase().includes(q) || nick.toLowerCase().includes(q)) {
+            hits.push({ uid: uid, name: nick || ("@" + handle), handle: "@" + handle });
+        }
+        if (hits.length >= 15) break;
+    }
+    if (hits.length === 0) { box.innerHTML = '<div class="drawer-empty">Niemand gefunden.</div>'; return; }
+    for (const h of hits) {
+        const already = !!friendState.friends[h.uid];
+        const incoming = !!friendState.requests[h.uid];
+        box.appendChild(friendMakeRow(h.uid, h.name, h.handle, {
+            dot: true,
+            btns: already
+                ? [{ label: "✅ Freund", cls: "ok", fn: () => drawerSetTab("friends") }]
+                : [
+                    { label: incoming ? "✔ Annehmen" : "➕ Anfrage", cls: "ok", fn: () => friendSendRequest(h.uid) },
+                    { label: "🚫", cls: "no", title: "Blockieren", fn: () => friendBlock(h.uid, h.name, h.handle) }
+                ]
+        }));
+    }
+}
+
+// ----- Bedienung verdrahten -----
+document.getElementById("btnDrawer").addEventListener("click", openDrawer);
+document.getElementById("btnDrawerClose").addEventListener("click", closeDrawer);
+document.getElementById("drawerOverlay").addEventListener("click", closeDrawer);
+for (const b of document.querySelectorAll(".drawer-tabs button")) {
+    b.addEventListener("click", () => drawerSetTab(b.dataset.tab));
+}
+document.getElementById("btnFcAdd").addEventListener("click", friendAddByCode);
+document.getElementById("fcInput").addEventListener("keydown", e => { if (e.key === "Enter") friendAddByCode(); });
+document.getElementById("btnSearch").addEventListener("click", friendSearch);
+document.getElementById("searchInput").addEventListener("keydown", e => { if (e.key === "Enter") friendSearch(); });
+document.getElementById("btnCopyFc").addEventListener("click", () => {
+    if (!account || !account.friendCode) return;
+    navigator.clipboard.writeText(friendCodeDisplay(account.friendCode)).then(() => {
+        const b = document.getElementById("btnCopyFc");
+        b.innerText = "✅";
+        setTimeout(() => { b.innerText = "📋"; }, 1200);
+    });
+});
 
 // ---------- Anzeigename (Nickname) ändern ----------
 
@@ -2624,6 +3235,7 @@ document.getElementById("btnNickSave").addEventListener("click", async () => {
         account.nick = nick || null;
         localStorage.setItem("account", JSON.stringify(account));
         accUpdateMenu();
+        friendRenderProfile();
         fdb.ref("status/" + account.uid + "/name").set(mpGetName()).catch(() => {});
         status.innerText = nick
             ? '✅ Gespeichert! Du heißt jetzt "' + nick + '".'
@@ -3912,6 +4524,7 @@ function mpRestoreSession() {
 }
 
 accUpdateMenu();
+friendsInit();
 mpRestoreSession();
 </script>
 
