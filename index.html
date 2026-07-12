@@ -434,6 +434,24 @@ body.mp-active .save-buttons {
     color: #ffd400;
 }
 
+/* Warnung: Lobby schließt wegen Inaktivität (Countdown) */
+.inactivity-warn {
+    background: #3a2a00;
+    border: 1px solid #ffb300;
+    color: #ffd766;
+    border-radius: 10px;
+    padding: 11px 13px;
+    margin: 0 0 16px;
+    font-size: 15px;
+    font-weight: 600;
+    text-align: center;
+    animation: inactPulse 1s ease-in-out infinite;
+}
+@keyframes inactPulse {
+    0%, 100% { border-color: #ffb300; }
+    50% { border-color: #ff6a00; }
+}
+
 /* ---------- Lobby-Browser ---------- */
 
 .lobby-entry {
@@ -1389,6 +1407,8 @@ body.mp-active .save-buttons {
 <!-- =============== LOBBY =============== -->
 <div id="screenLobby" class="screen" hidden>
     <h2 id="lobbyTitle">Lobby</h2>
+
+    <div id="inactivityWarn" class="inactivity-warn" hidden></div>
 
     <div id="lobbyCodeWrap" hidden>
         <label>Code zum Teilen:</label>
@@ -3518,6 +3538,7 @@ function mpTryCreate(statusFn, attempt) {
         public: mpSettings.isPublic,
         status: "waiting",
         createdAt: mpNow(),
+        lastActivity: mpNow(),         // für Auto-Schließen bei Inaktivität
         hostUid: account.uid,          // für den host-bezogenen Bann
         settings: {
             duration: mpSettings.duration,
@@ -3618,6 +3639,7 @@ function mpDoJoin(ref, code, statusFn) {
             statusFn("");
             setMenuStatus("");
             mpEnterLobby(code, "client");
+            mpBumpActivity(); // neuer Beitritt = Aktivität
             return;
         }
 
@@ -3664,6 +3686,11 @@ function mpEnterLobby(code, role) {
     // Regelmäßig aufräumen (zu lange offline = wirklich weg)
     clearInterval(mpHousekeepInt);
     mpHousekeepInt = setInterval(mpHousekeeping, 10000);
+
+    // Inaktivitäts-Countdown (jede Sekunde prüfen)
+    mpInactivityHit = false;
+    clearInterval(mpInactivityInt);
+    mpInactivityInt = setInterval(mpInactivityTick, 1000);
 
     // Chat abonnieren (letzte 60 Nachrichten)
     document.getElementById("chatMessages").innerHTML = "";
@@ -3725,6 +3752,7 @@ function mpSendChat(inputId, hintId) {
         time: firebase.database.ServerValue.TIMESTAMP
     }).catch(err => { hint.innerText = mpFriendlyError(err); });
     input.value = "";
+    mpBumpActivity(); // Chat = Aktivität -> Inaktivitäts-Timer zurücksetzen
 }
 
 function mpUpdateChatInput() {
@@ -4010,6 +4038,47 @@ document.addEventListener("click", () => {
 
 // Host: entfernt Spieler, die zu lange offline sind.
 // Clients: lösen die Lobby auf, wenn der Host dauerhaft weg ist.
+// ---------- Auto-Schließen bei Inaktivität (nur wartende Lobby) ----------
+// Passiert in einer wartenden Lobby zu lange nichts, wird sie geschlossen.
+// Jede Aktivität (Chat, Beitritt, Einstellungen ändern) setzt den Timer
+// über lastActivity zurück. In den letzten Sekunden läuft ein Countdown.
+const MP_INACTIVITY_LIMIT = 300000; // 5 Minuten ohne Aktivität
+const MP_INACTIVITY_WARN = 60000;   // letzte 60 s: Countdown zeigen
+let mpInactivityInt = null;
+let mpInactivityHit = false;        // wurde wegen Inaktivität geschlossen?
+
+function mpBumpActivity() {
+    if (!mpRef) return;
+    mpRef.child("lastActivity").set(mpNow()).catch(() => {});
+}
+
+function mpInactivityTick() {
+    const banner = document.getElementById("inactivityWarn");
+    if (!mpRef || !mpLobbyData || mpLobbyData.status !== "waiting") {
+        if (banner) banner.hidden = true;
+        return;
+    }
+    const base = mpLobbyData.lastActivity || mpLobbyData.createdAt || mpNow();
+    const remain = base + MP_INACTIVITY_LIMIT - mpNow();
+
+    if (remain <= 0) {
+        if (banner) banner.hidden = true;
+        mpInactivityHit = true;
+        // Der Host schließt die Lobby für alle
+        if (mpRole === "host") mpRef.remove().catch(() => {});
+        return;
+    }
+    if (remain <= MP_INACTIVITY_WARN) {
+        if (banner) {
+            banner.hidden = false;
+            banner.innerText = "💤 Keine Aktivität – Lobby schließt in " + Math.ceil(remain / 1000)
+                + " s. Schreib etwas, um sie offen zu halten!";
+        }
+    } else if (banner) {
+        banner.hidden = true;
+    }
+}
+
 function mpHousekeeping() {
     if (!mpRef || !mpLobbyData || !mpLobbyData.players) return;
     const now = mpNow();
@@ -4060,7 +4129,9 @@ function mpOnLobbyUpdate(data) {
     if (mpLeaving || !mpRef) return;
 
     if (!data) {
-        mpConnectionLost("❌ Die Lobby wurde geschlossen.");
+        mpConnectionLost(mpInactivityHit
+            ? "💤 Lobby wegen Inaktivität geschlossen."
+            : "❌ Die Lobby wurde geschlossen.");
         return;
     }
 
@@ -4222,6 +4293,7 @@ function mpOnSettingChanged() {
     }).catch(err => {
         document.getElementById("lobbyHint").innerText = mpFriendlyError(err);
     });
+    mpBumpActivity(); // Einstellung geändert = Aktivität
 }
 
 elSetDuration.addEventListener("change", mpOnSettingChanged);
@@ -4560,7 +4632,7 @@ document.getElementById("btnBackToLobby").addEventListener("click", () => {
     if (!mpRole) { showScreen("screenMenu"); return; }
     // Host setzt die Lobby auf "wartend" zurück -> Rematch möglich
     if (mpRole === "host" && mpRef) {
-        mpRef.update({ status: "waiting", result: null }).catch(() => {});
+        mpRef.update({ status: "waiting", result: null, lastActivity: mpNow() }).catch(() => {});
     }
     mpShowLobby();
 });
@@ -4585,6 +4657,10 @@ function mpCleanup() {
 
     clearInterval(mpHousekeepInt);
     mpHousekeepInt = null;
+    clearInterval(mpInactivityInt);
+    mpInactivityInt = null;
+    const iw = document.getElementById("inactivityWarn");
+    if (iw) iw.hidden = true;
     if (mpConnRef) { mpConnRef.off(); mpConnRef = null; }
     if (mpChatRef) { mpChatRef.off(); mpChatRef = null; }
     voiceLeave();   // Voice sauber beenden
