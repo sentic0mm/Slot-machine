@@ -844,6 +844,16 @@ body.mp-active .save-buttons {
     color: white;
 }
 
+/* Klickbarer "jetzt registrieren"-Hinweis, wird beim Hovern blau */
+.reg-link {
+    cursor: pointer;
+    text-decoration: underline;
+    transition: color .15s;
+}
+.reg-link:hover {
+    color: #4da3ff;
+}
+
 .at-row {
     display: flex;
     align-items: center;
@@ -2588,7 +2598,13 @@ async function accLogin(handle, pass) {
     accStatus("🔑 Logge ein…");
 
     const uid = (await fdb.ref("handles/" + lower).get()).val();
-    if (!uid) { accStatus("❌ @" + handle + " ist nicht registriert!"); return; }
+    if (!uid) {
+        // Kein Account -> Hinweis mit klickbarem "jetzt registrieren"
+        elLoginStatus.innerHTML = 'Noch kein Account? <span class="reg-link">jetzt registrieren</span>';
+        const rl = elLoginStatus.querySelector(".reg-link");
+        if (rl) rl.addEventListener("click", () => document.getElementById("tabRegister").click());
+        return;
+    }
 
     const user = (await fdb.ref("users/" + uid).get()).val();
     if (!user) { accStatus("❌ Account beschädigt – bitte Support anschreiben."); return; }
