@@ -324,7 +324,7 @@ input {
 #refreshSite {
     position: fixed;
     left: 10px;
-    bottom: 1%;
+    bottom: 10px;
     z-index: 100;
     background: #222;
     color: white;
@@ -1509,15 +1509,14 @@ body.mp-active .save-buttons {
 
 <button id="btnEasy">easy mode</button>
 
+<button id="refreshSite">refresh site</button>
+
 <div class="container">
 
     <div class="left">
         <button id="lever">
             🔴<br>│<br>│<br>│<br>■■■
         </button>
-
-        <button onclick="window.location.reload()" id="refreshSite">refresh site</button>
-
     </div>
 
     <div class="right">
@@ -2178,6 +2177,12 @@ document.getElementById("btnMode").addEventListener("click", () => {
 // Walzen beim Laden aufbauen
 setMode("classic");
 
+
+// "refresh site" lädt die Seite neu – dank network-first Service Worker
+// kommt dabei immer die neueste Version an.
+document.getElementById("refreshSite").addEventListener("click", () => {
+    window.location.reload();
+});
 
 document.getElementById("btnRefresh").addEventListener("click", () => {
     if (spinning) {
