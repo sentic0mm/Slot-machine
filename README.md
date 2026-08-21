@@ -6,8 +6,10 @@ https://sentic0mm.github.io/Slot-machine/
 --------------------------------------------------
 <h2>⚠️Achtung</h2>
 
-Diese seite nicht schliesen
-damit sie im cache gespeichert bleibt
-dass heist das sie auch offline funktioniert aber
-sie wird nach einem neustart oder nach
-einem bestimten zeitraum aus dem cache gelöscht
+Diese Seite läuft auch öffline 
+Über cache aber aufpassen
+wenn der Speicher zu niedrig läuft 
+räumt das System den Cache auf
+Um das System zu reinigen für mehr Speicher 
+
+(mehrspieler ist offline nicht verfügbar)
