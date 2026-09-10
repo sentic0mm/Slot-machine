@@ -1468,7 +1468,7 @@ body.mp-active .save-buttons {
 
         <div class="easy-row">
             <input type="checkbox" id="setEasy">
-            <label for="setEasy" style="margin:0">🟢 Easy Mode für alle (60% Gewinn)</label>
+            <label for="setEasy" style="margin:0">🟢 Easy Mode für alle (leicht erhöhte Gewinnchance)</label>
         </div>
     </div>
 
@@ -1629,9 +1629,10 @@ async function exportSave() {
 function applyImportedSave(saveData) {
     // gültige Systeme; alte Saves ohne Feld = Klassisch
     const sys = ["mega", "ultra"].includes(saveData.system) ? saveData.system : "classic";
+    resetEasyModeUI(); // ein importierter Save ist immer ein normales Konto, nie das Easy-Konto
     money = Number(saveData.money) || 0;
     if (gameMode !== sys) setMode(sys, false);   // Modus + Walzen umstellen
-    saveWallet(sys, money);
+    saveWallet(sys, money, false);
     updateMoney();
     return sys;
 }
@@ -1658,19 +1659,53 @@ const symbols = ["🍒","🍋","⭐","🔔","7️⃣","💎","🍀"];
 let gameMode = "classic";
 
 const WALLET_KEY = { classic: "money", mega: "moneyMega", ultra: "moneyUltra" };
-function loadWallet(mode) {
-    const v = localStorage.getItem(WALLET_KEY[mode] || "money");
-    return v !== null ? parseFloat(v) : 10;
+// Easy Mode bekommt pro Spielmodus eine komplett eigene Geldbörse. Vorher lief
+// Easy Mode über dasselbe Konto wie normal – dadurch flossen im Easy Mode
+// erspielte Gewinne beim Ausschalten direkt ins normale Konto zurück.
+const WALLET_KEY_EASY = { classic: "moneyEasy", mega: "moneyEasyMega", ultra: "moneyEasyUltra" };
+// Merkt sich pro Modus dauerhaft, ob das einmalige Easy-Startgeld schon
+// vergeben wurde – verhindert, dass man sich durch Aus-/Einschalten beliebig
+// oft 100$ ohne jede Gegenleistung gutschreiben kann.
+const EASY_STARTER_KEY = { classic: "easyStarterGiven", mega: "easyStarterGivenMega", ultra: "easyStarterGivenUltra" };
+
+function walletKey(mode, easy) {
+    return (easy ? WALLET_KEY_EASY[mode] : WALLET_KEY[mode]) || (easy ? "moneyEasy" : "money");
 }
-function saveWallet(mode, amount) {
-    localStorage.setItem(WALLET_KEY[mode] || "money", amount);
+// v === null heißt "dieses Konto wurde noch nie gespeichert" – bei easy=true
+// wichtig, um ein brandneues Easy-Konto von einem leergespielten (0$) zu unterscheiden.
+function loadWallet(mode, easy) {
+    const v = localStorage.getItem(walletKey(mode, easy));
+    if (v !== null) return parseFloat(v);
+    return easy ? null : 10;
+}
+function saveWallet(mode, amount, easy) {
+    localStorage.setItem(walletKey(mode, easy), amount);
+}
+// Vergibt das Easy-Mode-Startgeld genau einmal pro Modus (persistent markiert).
+// Danach bleibt ein leergespieltes Easy-Konto leer, bis man es sich normal erspielt.
+function grantEasyStarter(mode) {
+    const flagKey = EASY_STARTER_KEY[mode] || "easyStarterGiven";
+    if (localStorage.getItem(flagKey) === "1") return 0;
+    localStorage.setItem(flagKey, "1");
+    return 100;
+}
+// Setzt den Easy-Mode-Button/Zustand zurück (z.B. nach Multiplayer oder Save-Import).
+function resetEasyModeUI() {
+    easyMode = false;
+    const btn = document.getElementById("btnEasy");
+    if (btn) {
+        btn.classList.remove("easy-active");
+        btn.innerText = "easy mode";
+    }
 }
 
-let money = loadWallet("classic");
+let money = loadWallet("classic", false);
 
 let savingLocked = false;
 
-// Easy Mode: 60% Gewinn / 40% Verlust
+// Easy Mode: 42% Gewinn (2% davon Jackpot) / 58% Verlust im Klassik-Modus,
+// im MultiGrid/UltraGrid ein seltener erzwungener 3er-Lauf (20% pro Reihe).
+// Eigenes Konto pro Modus, siehe WALLET_KEY_EASY.
 let easyMode = false;
 
 let forceLose = false;
@@ -1698,7 +1733,7 @@ let mpLeaving = false;    // unterdrückt "Lobby geschlossen" beim absichtlichen
 let mpBusy = false;       // verhindert Doppelklick beim Erstellen/Beitreten
 
 function saveMoney() {
-    saveWallet(gameMode, money);
+    saveWallet(gameMode, money, easyMode);
 }
 
 const statusBox = document.getElementById("status");
@@ -1859,9 +1894,11 @@ function makeMegaGrid(easy) {
         grid.push(row);
     }
     if (easy) {
+        // Nerf: seltener (20% statt 55% pro Reihe) und nur noch die minimale
+        // Lauflänge von 3 (vorher 3..5) – vorher praktisch garantierter Gewinn.
         for (let r = 0; r < rows; r++) {
-            if (Math.random() < 0.55) {
-                const L = 3 + Math.floor(Math.random() * 3); // 3..5 gleiche von links
+            if (Math.random() < 0.20) {
+                const L = 3;
                 const s = randomSymbol();
                 for (let c = 0; c < L; c++) grid[r][c] = s;
                 if (L < cols && grid[r][L] === s) grid[r][L] = otherSymbol(s); // Lauf sauber begrenzen
@@ -2089,8 +2126,11 @@ async function startSpin() {
             let triple;
             if (forceLose) { forceLose = false; forcedLose = true; triple = makeLoseTriple(); }
             else if (easyMode) {
+                // Nerf: vorher 60% Gewinn / 6% Jackpot = ca. +68% Erwartungswert pro Einsatz
+                // (reiner Geld-Exploit). Jetzt 42% Gewinn / 2% Jackpot = ca. 0% (fair, aber
+                // spürbar öfter ein Gewinn als im Normalmodus mit seinen ~39%).
                 const roll = Math.random();
-                triple = roll < 0.6 ? makeWinTriple(roll < 0.06) : makeLoseTriple();
+                triple = roll < 0.42 ? makeWinTriple(roll < 0.02) : makeLoseTriple();
             } else {
                 triple = [randomSymbol(), randomSymbol(), randomSymbol()];
             }
@@ -2152,8 +2192,9 @@ document.getElementById("lever").addEventListener("click", startSpin);
 // manuellen Umschalten im Solo, NICHT im Multiplayer).
 function setMode(mode, switchWallet) {
     if (switchWallet && mode !== gameMode && !mpGame.active) {
-        saveWallet(gameMode, money);     // aktuelles Konto sichern
-        money = loadWallet(mode);        // Konto des neuen Modus laden
+        saveWallet(gameMode, money, easyMode);     // aktuelles Konto sichern
+        const loaded = loadWallet(mode, easyMode); // Konto des neuen Modus laden (gleiches easy/normal-Konto)
+        money = loaded !== null ? loaded : (easyMode ? grantEasyStarter(mode) : 10);
     }
     gameMode = mode;
     buildReels(mode);
@@ -2202,29 +2243,38 @@ document.getElementById("btnRefresh").addEventListener("click", () => {
 });
 
 
-// Easy Mode an/aus schalten
+// Easy Mode an/aus schalten – eigenes Konto pro Modus, kein Freigeld auf Knopfdruck.
 document.getElementById("btnEasy").addEventListener("click", () => {
     if (spinning) return; // nicht mitten im Spin umschalten
 
+    saveWallet(gameMode, money, easyMode); // aktuelles Konto sichern, bevor umgeschaltet wird
     easyMode = !easyMode;
     const btn = document.getElementById("btnEasy");
 
     if (easyMode) {
-        money = 100;
-        updateMoney();
+        const saved = loadWallet(gameMode, true);
+        if (saved === null) {
+            // Dieses Easy-Konto gab es noch nie -> einmaliges Startgeld (nie wieder).
+            money = grantEasyStarter(gameMode);
+            statusBox.innerText = "🟢 Easy Mode an – 100.00$ Startgeld (nur beim allerersten Mal)!";
+        } else {
+            // Bereits vorhandenes Easy-Konto (auch wenn 0$) -> kein neues Freigeld.
+            money = saved;
+            statusBox.innerText = "🟢 Easy Mode an – Easy-Konto: " + money.toFixed(2) + "$";
+        }
+        statusBox.className = "status win";
 
         btn.classList.add("easy-active");
         btn.innerText = "easy mode: AN";
-
-        statusBox.className = "status win";
-        statusBox.innerText = "🟢 Easy Mode an (60% Gewinn) – 100.00$ Startgeld!";
     } else {
+        money = loadWallet(gameMode, false); // zurück zum normalen Konto dieses Modus
         btn.classList.remove("easy-active");
         btn.innerText = "easy mode";
 
         statusBox.className = "status";
         statusBox.innerText = "⚪ Easy Mode aus";
     }
+    updateMoney();
 });
 
 
@@ -3497,7 +3547,8 @@ document.getElementById("btnSolo").addEventListener("click", () => {
     // Solo = das normale Spiel mit Save wie bisher.
     // Merken, damit ein Reload direkt wieder ins Solo-Spiel führt.
     sessionStorage.setItem("soloActive", "1");
-    money = loadWallet(gameMode);          // Konto des aktuellen Modus
+    resetEasyModeUI();                     // Solo startet immer normal, nicht im Easy-Konto
+    money = loadWallet(gameMode, false);   // Konto des aktuellen Modus
     document.body.classList.remove("mp-active");
     document.getElementById("mpSidebar").hidden = true;
     statusBox.className = "status";
@@ -4733,16 +4784,13 @@ function mpCleanup() {
     document.getElementById("mpSidebar").hidden = true;
 
     // Easy Mode zurücksetzen (könnte durch die Lobby-Einstellung an sein)
-    easyMode = false;
-    const btnEasy = document.getElementById("btnEasy");
-    btnEasy.classList.remove("easy-active");
-    btnEasy.innerText = "easy mode";
+    resetEasyModeUI();
 
     // Modus zurück auf Klassisch (MEGA war evtl. Lobby-Vorgabe)
     setMode("classic");
 
     // Solo-Konto (Klassisch) wiederherstellen
-    money = loadWallet("classic");
+    money = loadWallet("classic", false);
     updateMoney();
 
     mpLeaving = false;
