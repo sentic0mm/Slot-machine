@@ -837,6 +837,60 @@ body.mp-active .save-buttons {
     color: #00ff66;
 }
 
+/* ---------- Weltweite Rangliste ---------- */
+
+.lb-list {
+    min-height: 60px;
+}
+
+.lb-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid #333;
+    font-size: 18px;
+}
+
+.lb-row:last-child {
+    border-bottom: none;
+}
+
+.lb-row .lb-rank {
+    width: 42px;
+    flex-shrink: 0;
+    color: #aaa;
+    font-weight: bold;
+}
+
+.lb-row .lb-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lb-row .lb-handle {
+    color: #777;
+    font-size: 13px;
+}
+
+.lb-row .lb-val {
+    color: gold;
+    white-space: nowrap;
+}
+
+.lb-row.me .lb-name {
+    color: #00ff66;
+}
+
+.lb-me, .lb-note {
+    color: #aaa;
+    font-size: 14px;
+    margin: 0 0 15px;
+}
+
 /* ---------- Login / Account ---------- */
 
 #screenLogin input {
@@ -1343,6 +1397,7 @@ body.mp-active .save-buttons {
     <button id="btnSolo" class="menu-btn primary">🎰 Solo spielen</button>
     <button id="btnPublic" class="menu-btn">🌍 Öffentliche Lobbys</button>
     <button id="btnCreatePrivate" class="menu-btn">🔒 Private Lobby erstellen</button>
+    <button id="btnLeaderboard" class="menu-btn">🏆 Weltweite Rangliste</button>
 
     <div class="code-row">
         <input id="joinCode" maxlength="5" placeholder="CODE">
@@ -1415,6 +1470,24 @@ body.mp-active .save-buttons {
     <button id="btnReqBack" class="menu-btn">← Zurück</button>
 
     <div id="reqStatus" class="menu-status"></div>
+</div>
+
+<!-- =============== WELTWEITE RANGLISTE =============== -->
+<div id="screenLeaderboard" class="screen" hidden>
+    <h2>🏆 Weltweite Rangliste</h2>
+
+    <div class="login-tabs">
+        <button id="tabLbPlaytime" class="active">⏱ Spielzeit</button>
+        <button id="tabLbMoney">💰 Meiste Moneten</button>
+    </div>
+
+    <div id="lbNote" class="lb-note"></div>
+    <div class="result-list lb-list" id="lbList"></div>
+    <div id="lbMe" class="lb-me"></div>
+
+    <button id="btnLbBack" class="menu-btn">← Zurück</button>
+
+    <div id="lbStatus" class="menu-status"></div>
 </div>
 
 <!-- =============== ÖFFENTLICHE LOBBYS =============== -->
@@ -1732,6 +1805,11 @@ let mpMyName = "Spieler";
 let mpLeaving = false;    // unterdrückt "Lobby geschlossen" beim absichtlichen Verlassen
 let mpBusy = false;       // verhindert Doppelklick beim Erstellen/Beitreten
 
+// Zustand der weltweiten Rangliste – hier oben, weil updateMoney() schon
+// beim Laden aufgerufen wird (die eigentliche Logik steht weiter unten).
+const lbState = { ready: false, tab: "playtime", ref: null, pendingSec: 0,
+                  lastInput: Date.now(), bestMoney: 0, moneyTimer: null };
+
 function saveMoney() {
     saveWallet(gameMode, money, easyMode);
 }
@@ -1748,6 +1826,7 @@ function updateMoney() {
         mpReportMoney();
     } else {
         saveMoney();
+        lbNoteMoney();
     }
 }
 
@@ -2438,9 +2517,10 @@ const elMpTimer = document.getElementById("mpTimer");
 // ---------- Screens umschalten ----------
 
 function showScreen(id) {
-    for (const s of ["screenLogin", "screenMenu", "screenRecovery", "screenNick", "screenRequest", "screenBrowser", "screenLobby", "screenResults", "screenGame"]) {
+    for (const s of ["screenLogin", "screenMenu", "screenRecovery", "screenNick", "screenRequest", "screenBrowser", "screenLobby", "screenResults", "screenGame", "screenLeaderboard"]) {
         document.getElementById(s).hidden = (s !== id);
     }
+    if (id !== "screenLeaderboard") lbDetach();
     if (typeof friendUpdateHamburger === "function") friendUpdateHamburger();
 }
 
@@ -2711,6 +2791,7 @@ function accLoggedIn(uid, handle, nick, hasRecovery, joinPref) {
     localStorage.setItem("account", JSON.stringify(account));
     presenceStart();
     friendsInit();
+    lbInitAccount();
     // Frischer Login/Registrierung -> Passwort wird gerade verschlüsselt,
     // also keine Warnung mehr nötig.
     document.getElementById("pwencWarn").hidden = true;
@@ -2755,6 +2836,8 @@ document.getElementById("btnGoLogin").addEventListener("click", () => {
 });
 
 document.getElementById("btnLogout").addEventListener("click", () => {
+    lbFlushPlaytime();
+    clearTimeout(lbState.moneyTimer);
     presenceStop();
     friendsTeardown();
     account = null;
@@ -2780,6 +2863,7 @@ function maybeShowPwEncWarning(hasPwEnc) {
 
 document.getElementById("btnPwencRelogin").addEventListener("click", () => {
     const h = account ? account.handle : "";
+    lbFlushPlaytime();
     presenceStop();
     friendsTeardown();
     account = null;
@@ -2985,6 +3069,7 @@ if (account && fdb) {
     fdb.ref("users/" + account.uid).get().then(snap => {
         const user = snap.val();
         if (!user) {
+            lbRemoveEntry(account.uid);
             presenceStop(true);
             friendsTeardown();
             account = null;
@@ -3015,6 +3100,231 @@ function mpGetName() {
     // einen echten @Namen als Nickname faken)
     return account.nick ? account.nick : "@" + account.handle;
 }
+
+// ========== Weltweite Rangliste ==========
+//
+// Datenbank-Struktur:
+//   leaderboard/<uid> – { name, handle, playtime (Sekunden), money, updatedAt }
+//
+// Spielzeit: zählt nur, solange der Spiel-Screen offen, der Tab sichtbar
+// und man nicht länger als LB_AFK_LIMIT inaktiv ist (kein AFK-Farmen).
+// Die Sekunden werden gesammelt und alle LB_FLUSH_SEC per increment()
+// hochgeladen – so zählen auch mehrere Geräte korrekt zusammen.
+// Moneten: höchster je erreichter Kontostand im Solo (ohne Easy Mode,
+// ohne Multiplayer). Nur für Accounts – Gäste tauchen nicht auf.
+// Wie der Rest des Spiels vertrauensbasiert (kein echtes Auth).
+
+const LB_LIMIT = 50;             // so viele Plätze werden angezeigt
+const LB_FLUSH_SEC = 30;         // alle X gesammelten Sekunden hochladen
+const LB_MAX_CHUNK = 60;         // max. Sekunden pro Schreibvorgang (DB-Regel erlaubt 120)
+const LB_AFK_LIMIT = 2 * 60000;  // ab 2 min ohne Eingabe zählt die Zeit nicht mehr
+
+function lbBestKey(uid) { return "lbBestMoney_" + uid; }
+
+function lbFormatTime(sec) {
+    sec = Math.max(0, Math.floor(Number(sec) || 0));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (h > 0) return h + " h " + String(m).padStart(2, "0") + " min";
+    if (m > 0) return m + " min " + String(s).padStart(2, "0") + " s";
+    return s + " s";
+}
+
+function lbFormatMoney(v) {
+    return (Number(v) || 0).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "$";
+}
+
+function lbBaseData() {
+    return {
+        name: mpGetName().slice(0, 40),
+        handle: "@" + account.handle,
+        updatedAt: firebase.database.ServerValue.TIMESTAMP
+    };
+}
+
+// ----- Spielzeit -----
+function lbIsPlaying() {
+    const g = document.getElementById("screenGame");
+    return !!account && !!g && !g.hidden
+        && document.visibilityState === "visible"
+        && (Date.now() - lbState.lastInput) < LB_AFK_LIMIT;
+}
+
+function lbFlushPlaytime() {
+    if (!fdb || !account || lbState.pendingSec <= 0) return;
+    const n = Math.min(Math.floor(lbState.pendingSec), LB_MAX_CHUNK);
+    lbState.pendingSec = 0; // Rest (nur bei langen Ausfällen) verfällt
+    const data = lbBaseData();
+    data.playtime = firebase.database.ServerValue.increment(n);
+    fdb.ref("leaderboard/" + account.uid).update(data).catch(err => {
+        console.warn("Rangliste: Spielzeit nicht gespeichert", err);
+    });
+}
+
+for (const ev of ["pointerdown", "keydown", "touchstart", "wheel"]) {
+    document.addEventListener(ev, () => { lbState.lastInput = Date.now(); }, { passive: true });
+}
+
+setInterval(() => {
+    if (!lbIsPlaying()) return;
+    lbState.pendingSec++;
+    if (lbState.pendingSec >= LB_FLUSH_SEC) lbFlushPlaytime();
+}, 1000);
+
+// Beim Tab-Wechsel / Schließen den Rest noch schnell wegschicken
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") lbFlushPlaytime();
+});
+window.addEventListener("pagehide", lbFlushPlaytime);
+
+// ----- Moneten-Rekord -----
+function lbNoteMoney() {
+    if (!lbState.ready || !account || easyMode || mpGame.active || mpRole) return;
+    const v = Math.round((Number(money) || 0) * 100) / 100;
+    if (!(v > lbState.bestMoney) || !isFinite(v)) return;
+    lbState.bestMoney = v;
+    localStorage.setItem(lbBestKey(account.uid), String(v));
+    // Bei Auto-Spins nicht jeden Spin schreiben – kurz sammeln
+    clearTimeout(lbState.moneyTimer);
+    lbState.moneyTimer = setTimeout(lbPushMoney, 3000);
+}
+
+function lbPushMoney() {
+    if (!fdb || !account) return;
+    const data = lbBaseData();
+    data.money = lbState.bestMoney;
+    fdb.ref("leaderboard/" + account.uid).update(data).catch(err => {
+        console.warn("Rangliste: Moneten nicht gespeichert", err);
+    });
+}
+
+// Nach Login / beim Start: lokalen Rekord mit der Datenbank abgleichen.
+// Bestehende Spieler bekommen dabei ihren aktuellen Kontostand eingetragen.
+async function lbInitAccount() {
+    lbState.bestMoney = 0;
+    lbState.pendingSec = 0;
+    if (!fdb || !account) return;
+    const uid = account.uid;
+    let best = parseFloat(localStorage.getItem(lbBestKey(uid))) || 0;
+    for (const m of ["classic", "mega", "ultra"]) {
+        const w = loadWallet(m, false);
+        if (w !== null && isFinite(w) && w > best) best = w;
+    }
+    best = Math.round(best * 100) / 100;
+    lbState.bestMoney = best;
+    try {
+        const entry = (await fdb.ref("leaderboard/" + uid).get()).val() || {};
+        if (!account || account.uid !== uid) return;
+        const dbBest = Number(entry.money) || 0;
+        if (dbBest > lbState.bestMoney) {
+            lbState.bestMoney = dbBest;
+            localStorage.setItem(lbBestKey(uid), String(dbBest));
+        } else if (lbState.bestMoney > dbBest || entry.name !== mpGetName()) {
+            lbPushMoney(); // trägt auch Namensänderungen nach
+        }
+    } catch (e) {
+        console.warn("Rangliste nicht erreichbar:", e);
+    }
+}
+
+function lbRemoveEntry(uid) {
+    if (fdb && uid) fdb.ref("leaderboard/" + uid).remove().catch(() => {});
+}
+
+// ----- Anzeige -----
+function lbSetTab(tab) {
+    lbState.tab = tab;
+    document.getElementById("tabLbPlaytime").classList.toggle("active", tab === "playtime");
+    document.getElementById("tabLbMoney").classList.toggle("active", tab === "money");
+    document.getElementById("lbNote").innerText = tab === "playtime"
+        ? "Gesamte Zeit im Spiel (Solo + Multiplayer, ohne AFK)."
+        : "Höchster je erreichter Kontostand im Solo (ohne Easy Mode).";
+    lbAttach();
+}
+
+function lbDetach() {
+    if (lbState.ref) { lbState.ref.off(); lbState.ref = null; }
+}
+
+function lbAttach() {
+    lbDetach();
+    const list = document.getElementById("lbList");
+    const status = document.getElementById("lbStatus");
+    status.innerText = "";
+    if (!fdb) {
+        list.innerHTML = '<div class="drawer-empty">Rangliste braucht Internet.</div>';
+        return;
+    }
+    list.innerHTML = '<div class="drawer-empty">Lädt…</div>';
+    // Eigene Sekunden direkt mitschicken, damit man sich aktuell sieht
+    lbFlushPlaytime();
+    const field = lbState.tab;
+    lbState.ref = fdb.ref("leaderboard").orderByChild(field).limitToLast(LB_LIMIT);
+    lbState.ref.on("value", snap => {
+        const rows = [];
+        snap.forEach(c => {
+            const v = c.val() || {};
+            if (Number(v[field]) > 0) rows.push({ uid: c.key, ...v });
+        });
+        rows.reverse(); // Firebase liefert aufsteigend
+        lbRender(rows, field);
+    }, err => {
+        list.innerHTML = "";
+        status.innerText = mpFriendlyError(err);
+    });
+}
+
+function lbRender(rows, field) {
+    const list = document.getElementById("lbList");
+    const fmt = field === "playtime" ? lbFormatTime : lbFormatMoney;
+    const medals = ["🥇", "🥈", "🥉"];
+    if (rows.length === 0) {
+        list.innerHTML = '<div class="drawer-empty">Noch niemand drin – sei der Erste! 🚀</div>';
+    } else {
+        list.innerHTML = rows.map((r, i) => {
+            const me = account && r.uid === account.uid;
+            return '<div class="lb-row' + (me ? " me" : "") + '">'
+                + '<span class="lb-rank">' + (medals[i] || (i + 1) + ".") + '</span>'
+                + '<span class="lb-name">' + escapeHtml(r.name || "?") + devBadgeHtml(r.uid)
+                + (r.handle && r.handle !== r.name ? ' <span class="lb-handle">' + escapeHtml(r.handle) + '</span>' : "")
+                + '</span>'
+                + '<span class="lb-val">' + fmt(r[field]) + '</span>'
+                + '</div>';
+        }).join("");
+    }
+
+    const meEl = document.getElementById("lbMe");
+    if (!account) {
+        meEl.innerText = "🎭 Als Gast landest du nicht in der Rangliste – log dich ein!";
+        return;
+    }
+    const idx = rows.findIndex(r => r.uid === account.uid);
+    if (idx >= 0) {
+        meEl.innerText = "Du bist auf Platz " + (idx + 1) + " 🎉";
+    } else {
+        fdb.ref("leaderboard/" + account.uid + "/" + field).get().then(s => {
+            if (lbState.tab !== field) return;
+            meEl.innerText = "Du bist (noch) nicht in den Top " + LB_LIMIT
+                + " – dein Wert: " + fmt(s.val() || 0);
+        }).catch(() => { meEl.innerText = ""; });
+    }
+}
+
+document.getElementById("btnLeaderboard").addEventListener("click", () => {
+    setMenuStatus("");
+    showScreen("screenLeaderboard");
+    lbSetTab(lbState.tab);
+});
+document.getElementById("tabLbPlaytime").addEventListener("click", () => lbSetTab("playtime"));
+document.getElementById("tabLbMoney").addEventListener("click", () => lbSetTab("money"));
+document.getElementById("btnLbBack").addEventListener("click", () => {
+    lbDetach();
+    showScreen("screenMenu");
+});
+
+lbState.ready = true;
+lbInitAccount();
 
 // ========== Profil & Freunde (Drawer) ==========
 //
@@ -4786,11 +5096,12 @@ function mpCleanup() {
     // Easy Mode zurücksetzen (könnte durch die Lobby-Einstellung an sein)
     resetEasyModeUI();
 
+    // Solo-Konto (Klassisch) wiederherstellen – VOR setMode(), sonst
+    // speichert setMode() den Multiplayer-Kontostand ins Solo-Konto.
+    money = loadWallet("classic", false);
+
     // Modus zurück auf Klassisch (MEGA war evtl. Lobby-Vorgabe)
     setMode("classic");
-
-    // Solo-Konto (Klassisch) wiederherstellen
-    money = loadWallet("classic", false);
     updateMoney();
 
     mpLeaving = false;
