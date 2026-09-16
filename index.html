@@ -901,6 +901,15 @@ body.mp-active .save-buttons {
     white-space: nowrap;
 }
 
+/* Kleiner grauer Zehnerpotenz-Hinweis (10ˣ) neben stark gekürzten Beträgen -
+   in der Rangliste und bei der eigenen Geldanzeige (#winDisplay). */
+.money-magnitude {
+    color: #888;
+    font-size: 0.75em;
+    font-weight: normal;
+    white-space: nowrap;
+}
+
 .lb-row.me .lb-name {
     color: #00ff66;
 }
@@ -1948,8 +1957,8 @@ function saveMoney() {
 const statusBox = document.getElementById("status");
 
 function updateMoney() {
-    document.getElementById("winDisplay").innerText =
-        "💰 " + money.toFixed(2) + "$";
+    document.getElementById("winDisplay").innerHTML =
+        "💰 " + formatMoneyAmount(money) + "$" + moneyMagnitudeHtml(money);
 
     if (mpGame.active) {
         // Im Multiplayer NICHT in den Solo-Save schreiben,
@@ -2219,7 +2228,7 @@ function countUp(from, to, duration, cb) {
 }
 
 function setMoneyDisplay(v) {
-    document.getElementById("winDisplay").innerText = "💰 " + v.toFixed(2) + "$";
+    document.getElementById("winDisplay").innerHTML = "💰 " + formatMoneyAmount(v) + "$" + moneyMagnitudeHtml(v);
 }
 
 // Zählt das Geld pro Gewinnlinie hoch, blitzt die Zellen auf und zeigt
@@ -3415,8 +3424,60 @@ function lbFormatTime(sec) {
     return s + " s";
 }
 
+// Kürzt sehr große Beträge (Mio./Mrd./Bio./...) - ohne das wären die
+// 16-19-stelligen Zahlen mancher Alt-/Exploit-Konten kaum noch lesbar.
+// Als lokale Konstante (statt Modul-const) definiert, weil updateMoney()
+// schon beim Laden läuft, bevor eine spätere const-Deklaration erreicht
+// wäre (TDZ, siehe auch account/lbState weiter oben).
+function formatMoneyAmount(v) {
+    const MONEY_SCALE = [
+        { exp: 21, suf: "Trilld." }, // Trilliarde
+        { exp: 18, suf: "Trill." },  // Trillion
+        { exp: 15, suf: "Brd." },    // Billiarde
+        { exp: 12, suf: "Bio." },    // Billion
+        { exp: 9,  suf: "Mrd." },    // Milliarde
+        { exp: 6,  suf: "Mio." }     // Million
+    ];
+    const n = Number(v) || 0;
+    const abs = Math.abs(n);
+    for (const s of MONEY_SCALE) {
+        const unit = Math.pow(10, s.exp);
+        if (abs >= unit) {
+            return (n / unit).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " " + s.suf;
+        }
+    }
+    return n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// x = Anzahl Nullen hinter der führenden 1 (10^x <= |v| < 10^(x+1)).
+function moneyMagnitude(v) {
+    const abs = Math.abs(Number(v) || 0);
+    if (abs < 1) return 0;
+    return Math.floor(Math.log10(abs));
+}
+
+function toSuperscript(n) {
+    const SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+    return String(n).split("").map(c => c === "-" ? "⁻" : SUPERSCRIPT_DIGITS[+c]).join("");
+}
+
+// Kleiner grauer Zehnerpotenz-Hinweis (10ˣ) neben der gekürzten Zahl - nur
+// ab 1 Million, darunter ist die Zahl eh kurz genug ohne Hilfe lesbar.
+// title zeigt beim Hovern zusätzlich den exakten Wert.
+function moneyMagnitudeHtml(v) {
+    const mag = moneyMagnitude(v);
+    if (mag < 6) return "";
+    const exact = (Number(v) || 0).toLocaleString("de-DE");
+    return ' <span class="money-magnitude" title="' + escapeHtml(exact) + '$">≈10' + toSuperscript(mag) + '</span>';
+}
+
 function lbFormatMoney(v) {
-    return (Number(v) || 0).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "$";
+    return formatMoneyAmount(v) + "$";
+}
+// HTML-Variante mit Zehnerpotenz-Hinweis - nur für innerHTML-Stellen (die
+// Zahl kommt aus Number(), also unproblematisch einzufügen).
+function lbFormatMoneyHtml(v) {
+    return formatMoneyAmount(v) + "$" + moneyMagnitudeHtml(v);
 }
 
 function lbBaseData() {
@@ -3558,7 +3619,8 @@ function lbAttach() {
 
 function lbRender(rows, field) {
     const list = document.getElementById("lbList");
-    const fmt = field === "playtime" ? lbFormatTime : lbFormatMoney;
+    const fmt = field === "playtime" ? lbFormatTime : lbFormatMoney;         // Plain-Text (innerText-Stellen)
+    const fmtHtml = field === "playtime" ? lbFormatTime : lbFormatMoneyHtml; // mit Zehnerpotenz-Hinweis (innerHTML)
     const medals = ["🥇", "🥈", "🥉"];
     if (rows.length === 0) {
         list.innerHTML = '<div class="drawer-empty">Noch niemand drin – sei der Erste! 🚀</div>';
@@ -3570,7 +3632,7 @@ function lbRender(rows, field) {
                 + '<span class="lb-name">' + escapeHtml(r.name || "?") + devBadgeHtml(r.uid)
                 + (r.handle && r.handle !== r.name ? ' <span class="lb-handle">' + escapeHtml(r.handle) + '</span>' : "")
                 + '</span>'
-                + '<span class="lb-val">' + fmt(r[field]) + '</span>'
+                + '<span class="lb-val">' + fmtHtml(r[field]) + '</span>'
                 + '</div>';
         }).join("");
     }
