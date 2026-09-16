@@ -2,6 +2,11 @@ name = "slotmachine-leaderboard"
 main = "src/index.js"
 compatibility_date = "2024-09-01"
 
+# Workers Logs: speichert Requests dauerhaft & durchsuchbar im Dashboard
+# (Tab "Observability"), nicht nur live wie "wrangler tail".
+[observability]
+enabled = true
+
 # Öffentliche Firebase-Projektdaten (kein Geheimnis, stehen genauso im
 # Client-Code von index.html) - hier NICHT als Secret, sondern als normale
 # Variable, damit sie bei "wrangler deploy" ohne Rückfrage mitkommt.

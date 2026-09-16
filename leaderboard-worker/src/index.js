@@ -7,9 +7,11 @@
 //   1) POST /login   { uid, pass } -> prüft das Passwort GENAU EINMAL gegen
 //      die Datenbank (wie der bisherige Login), gibt bei Erfolg ein
 //      signiertes Session-Token zurück (HMAC, Geheimnis kennt nur der Worker).
-//   2) POST /leaderboard  { token, name, handle, playtime?, money? } ->
-//      prüft das Token, prüft die Werte (wie vorher die DB-Regeln: playtime
-//      nur steigend + max. +120 pro Schreibvorgang, money >= 0, Längen),
+//   2) POST /leaderboard  { token, name, handle, playtimeIncrement?, money? }
+//      -> prüft das Token, prüft die Werte (playtime nur steigend + max.
+//      +120 pro Schreibvorgang, money >= 0 und darf pro Schreibvorgang
+//      höchstens das 1000-fache des bisherigen Werts sein - siehe
+//      MONEY_GROWTH_FACTOR, blockt "Konsole auf, Fantasiezahl eintippen"),
 //      und schreibt danach MIT ADMIN-RECHTEN nach leaderboard/<uid> - an den
 //      (jetzt für Clients gesperrten) DB-Regeln vorbei.
 //
@@ -23,6 +25,14 @@ const TOKEN_TTL_SEC = 12 * 60 * 60;      // Session-Token 12h gültig
 const LB_PLAYTIME_MAX_DELTA = 120;       // wie zuvor in database.rules.json
 const NAME_MAX = 40;
 const HANDLE_MAX = 20;
+// Höchster Multiplikator im Spiel ist der Grid-Jackpot mit x500 (JACKPOT_MULT
+// in index.html), Einsatz selbst ist unbegrenzt. x1000 lässt jedem echten
+// Gewinn (auch mehrere Spins auf einmal) reichlich Luft, blockt aber
+// "Konsole auf -> Fantasiezahl eintippen". MONEY_MIN_JUMP ist der Boden für
+// kleine Kontostände, damit ein Sprung von z.B. 10$ auf einen ordentlichen
+// vierstelligen Gewinn nicht am *1000 von quasi-Null scheitert.
+const MONEY_GROWTH_FACTOR = 1000;
+const MONEY_MIN_JUMP = 10000;
 
 export default {
   async fetch(request, env) {
@@ -45,6 +55,7 @@ export default {
       }
       return corsResponse(resp, origin, allowed);
     } catch (err) {
+      console.error("Unerwarteter Fehler: " + String(err && err.message || err));
       return corsResponse(
         jsonResponse({ ok: false, error: "server_error", detail: String(err && err.message || err) }, 500),
         origin, allowed
@@ -59,33 +70,53 @@ async function handleLogin(request, env) {
   const body = await readJson(request);
   const uid = typeof body.uid === "string" ? body.uid : "";
   const pass = typeof body.pass === "string" ? body.pass : "";
-  if (!uid || !pass) return jsonResponse({ ok: false, error: "missing_fields" }, 400);
+  if (!uid || !pass) {
+    console.log("login: Anfrage ohne uid/pass abgelehnt");
+    return jsonResponse({ ok: false, error: "missing_fields" }, 400);
+  }
 
   const user = await fbGet(env, "users/" + encodeURIComponent(uid) + ".json");
-  if (!user) return jsonResponse({ ok: false, error: "invalid_login" }, 401);
+  if (!user) {
+    console.log("login " + uid + ": Account existiert nicht");
+    return jsonResponse({ ok: false, error: "invalid_login" }, 401);
+  }
 
+  // Passwort NIE mitloggen - nur uid und Ergebnis.
   const expected = await sha256("slotm:" + uid + ":" + pass);
-  if (expected !== user.passHash) return jsonResponse({ ok: false, error: "invalid_login" }, 401);
+  if (expected !== user.passHash) {
+    console.log("login " + uid + ": falsches Passwort");
+    return jsonResponse({ ok: false, error: "invalid_login" }, 401);
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const token = await signToken({ uid, exp: now + TOKEN_TTL_SEC }, env.WORKER_SECRET);
+  console.log("login " + uid + ": erfolgreich, Token ausgestellt (gueltig bis " + new Date((now + TOKEN_TTL_SEC) * 1000).toISOString() + ")");
   return jsonResponse({ ok: true, token, exp: now + TOKEN_TTL_SEC });
 }
 
 async function handleLeaderboardWrite(request, env) {
   const body = await readJson(request);
   const payload = await verifyToken(body.token, env.WORKER_SECRET);
-  if (!payload) return jsonResponse({ ok: false, error: "invalid_token" }, 401);
+  if (!payload) {
+    console.log("leaderboard: Token ungueltig oder abgelaufen abgelehnt");
+    return jsonResponse({ ok: false, error: "invalid_token" }, 401);
+  }
   const uid = payload.uid;
 
   const update = {};
 
   if (typeof body.name === "string") {
-    if (body.name.length > NAME_MAX) return jsonResponse({ ok: false, error: "name_too_long" }, 400);
+    if (body.name.length > NAME_MAX) {
+      console.log("leaderboard " + uid + ": name zu lang abgelehnt (" + body.name.length + " Zeichen)");
+      return jsonResponse({ ok: false, error: "name_too_long" }, 400);
+    }
     update.name = body.name;
   }
   if (typeof body.handle === "string") {
-    if (body.handle.length > HANDLE_MAX) return jsonResponse({ ok: false, error: "handle_too_long" }, 400);
+    if (body.handle.length > HANDLE_MAX) {
+      console.log("leaderboard " + uid + ": handle zu lang abgelehnt (" + body.handle.length + " Zeichen)");
+      return jsonResponse({ ok: false, error: "handle_too_long" }, 400);
+    }
     update.handle = body.handle;
   }
 
@@ -94,25 +125,45 @@ async function handleLeaderboardWrite(request, env) {
     // aktive Geräte korrekt zusammen (wie vorher ServerValue.increment()).
     const inc = Number(body.playtimeIncrement);
     if (!Number.isFinite(inc) || inc < 0 || inc > LB_PLAYTIME_MAX_DELTA) {
+      console.log("leaderboard " + uid + ": playtimeIncrement abgelehnt (Wert: " + body.playtimeIncrement + ", erlaubt 0-" + LB_PLAYTIME_MAX_DELTA + ")");
       return jsonResponse({ ok: false, error: "bad_playtime_delta" }, 400);
     }
     const current = await fbGet(env, "leaderboard/" + encodeURIComponent(uid) + "/playtime.json");
     update.playtime = (Number(current) || 0) + inc;
+    console.log("leaderboard " + uid + ": playtime " + (Number(current) || 0) + " + " + inc + " = " + update.playtime);
   }
 
   if (body.money !== undefined) {
     const v = Number(body.money);
-    if (!Number.isFinite(v) || v < 0) return jsonResponse({ ok: false, error: "bad_money" }, 400);
+    if (!Number.isFinite(v) || v < 0) {
+      console.log("leaderboard " + uid + ": money abgelehnt (Wert: " + body.money + ", muss >= 0 sein)");
+      return jsonResponse({ ok: false, error: "bad_money" }, 400);
+    }
+    // Zuwachsrate begrenzen (wie playtime) - aber nur, wenn schon ein
+    // Vorwert existiert. Beim allerersten Sync eines Accounts (z.B. Bestand
+    // von vor diesem Feature) gibt es nichts zum Vergleichen -> unbegrenzt.
+    const currentRaw = await fbGet(env, "leaderboard/" + encodeURIComponent(uid) + "/money.json");
+    if (currentRaw !== null) {
+      const cur = Number(currentRaw) || 0;
+      const maxAllowed = Math.max(cur * MONEY_GROWTH_FACTOR, cur + MONEY_MIN_JUMP);
+      if (v > maxAllowed) {
+        console.log("leaderboard " + uid + ": money-Sprung abgelehnt (" + cur + " -> " + v + ", erlaubt bis " + maxAllowed + ")");
+        return jsonResponse({ ok: false, error: "bad_money_jump" }, 400);
+      }
+    }
     update.money = v;
+    console.log("leaderboard " + uid + ": money = " + v);
   }
 
   if (Object.keys(update).length === 0) {
+    console.log("leaderboard " + uid + ": Anfrage ohne verwertbare Felder abgelehnt");
     return jsonResponse({ ok: false, error: "nothing_to_write" }, 400);
   }
 
   update.updatedAt = { ".sv": "timestamp" };
 
   await fbPatch(env, "leaderboard/" + encodeURIComponent(uid) + ".json", update);
+  console.log("leaderboard " + uid + ": erfolgreich geschrieben (" + Object.keys(update).filter(k => k !== "updatedAt").join(", ") + ")");
   return jsonResponse({ ok: true });
 }
 
