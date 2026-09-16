@@ -1017,6 +1017,39 @@ body.mp-active .save-buttons {
     text-decoration: underline;
 }
 
+/* Vollbild-Warnung: Account noch ohne Rangliste-Token (gleicher Look wie pwencWarn) */
+#lbTokenWarn {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.93);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+#lbTokenWarn .warn-box {
+    max-width: 460px;
+    text-align: center;
+    background: #2a1d00;
+    border: 2px solid #ffd400;
+    border-radius: 14px;
+    padding: 30px 25px;
+}
+
+#lbTokenWarn h1 { font-size: 30px; margin: 0 0 15px; color: #ffd400; }
+#lbTokenWarn p { font-size: 17px; line-height: 1.6; color: #eee; }
+
+#lbTokenWarn .later {
+    display: inline-block;
+    margin-top: 12px;
+    color: #999;
+    font-size: 14px;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
 /* Eingeloggter Account: dezent unten rechts, grau statt weiß */
 #accountTag {
     position: fixed;
@@ -1344,6 +1377,25 @@ body.mp-active .save-buttons {
         </p>
         <button id="btnPwencRelogin" class="menu-btn primary">🔄 Jetzt aus- &amp; wieder einloggen</button>
         <span id="btnPwencLater" class="later">Erstmal weiterspielen</span>
+    </div>
+</div>
+
+<!-- Vollbild-Warnung: Account noch ohne Rangliste-Token (Update für die
+     Weltweite Rangliste - Logins von VOR diesem Update kennen den
+     Leaderboard-Worker noch nicht) -->
+<div id="lbTokenWarn" hidden>
+    <div class="warn-box">
+        <h1>🏆 Update für die Rangliste</h1>
+        <p>
+            Die Weltweite Rangliste läuft jetzt über einen geprüften
+            Server statt direkt – dafür brauchst du einmal einen neuen
+            Sicherheits-Schlüssel. Bitte logge dich einmal kurz
+            <b>aus und wieder ein</b>.<br><br>
+            <b>Dein Passwort bleibt dabei gleich</b>, du musst es nur einmal
+            neu eingeben.
+        </p>
+        <button id="btnLbTokenRelogin" class="menu-btn primary">🔄 Jetzt aus- &amp; wieder einloggen</button>
+        <span id="btnLbTokenLater" class="later">Erstmal weiterspielen</span>
     </div>
 </div>
 
@@ -1731,6 +1783,14 @@ const symbols = ["🍒","🍋","⭐","🔔","7️⃣","💎","🍀"];
 // Geldbörse pro Modus trennt (Klassisch und MEGA = getrennte Konten).
 let gameMode = "classic";
 
+// account hier (statt weiter unten bei "Login / Account") geladen, weil die
+// Wallet-Funktionen gleich unten schon beim Start (money = loadWallet(...))
+// wissen müssen, ob ein Account eingeloggt ist (TDZ, siehe auch lbState).
+// Der volle Login-Zustand (presenceStart(), Freunde, Rangliste, …) wird
+// weiter unten in accLoggedIn() nachgezogen, hier zählt nur uid/handle.
+let account = null; // { uid, handle }
+try { account = JSON.parse(localStorage.getItem("account") || "null"); } catch (e) {}
+
 const WALLET_KEY = { classic: "money", mega: "moneyMega", ultra: "moneyUltra" };
 // Easy Mode bekommt pro Spielmodus eine komplett eigene Geldbörse. Vorher lief
 // Easy Mode über dasselbe Konto wie normal – dadurch flossen im Easy Mode
@@ -1741,23 +1801,51 @@ const WALLET_KEY_EASY = { classic: "moneyEasy", mega: "moneyEasyMega", ultra: "m
 // oft 100$ ohne jede Gegenleistung gutschreiben kann.
 const EASY_STARTER_KEY = { classic: "easyStarterGiven", mega: "easyStarterGivenMega", ultra: "easyStarterGivenUltra" };
 
+// Konten sind jetzt an den Account gebunden (uid-Suffix), nicht mehr nur ans
+// Gerät – sonst hätte sich ein zweiter Account auf demselben Gerät denselben
+// Kontostand geteilt. Gäste (account === null) bleiben weiter geräte-global,
+// da sie keine feste Identität zum Binden haben.
+function walletSuffix() {
+    return (account && account.uid) ? "_" + account.uid : "";
+}
 function walletKey(mode, easy) {
-    return (easy ? WALLET_KEY_EASY[mode] : WALLET_KEY[mode]) || (easy ? "moneyEasy" : "money");
+    const base = (easy ? WALLET_KEY_EASY[mode] : WALLET_KEY[mode]) || (easy ? "moneyEasy" : "money");
+    return base + walletSuffix();
 }
 // v === null heißt "dieses Konto wurde noch nie gespeichert" – bei easy=true
 // wichtig, um ein brandneues Easy-Konto von einem leergespielten (0$) zu unterscheiden.
 function loadWallet(mode, easy) {
-    const v = localStorage.getItem(walletKey(mode, easy));
+    const key = walletKey(mode, easy);
+    let v = localStorage.getItem(key);
+    if (v === null && account && account.uid) {
+        // Einmalige Migration (pro Gerät, nicht pro Account!): der alte
+        // geräte-globale Kontostand von VOR der Account-Bindung geht genau
+        // einmal an den ersten Account über, der ihn hier abruft. Das Flag
+        // wird dabei sofort verbraucht, damit ein zweiter Account auf
+        // demselben Gerät sauber bei seinem eigenen (neuen) Konto startet,
+        // statt den fremden Stand zu erben.
+        const legacyKey = easy ? WALLET_KEY_EASY[mode] : WALLET_KEY[mode];
+        const migFlag = "walletMigrated_" + (legacyKey || mode);
+        if (legacyKey && localStorage.getItem(migFlag) !== "1") {
+            localStorage.setItem(migFlag, "1");
+            const legacy = localStorage.getItem(legacyKey);
+            if (legacy !== null) {
+                localStorage.setItem(key, legacy);
+                v = legacy;
+            }
+        }
+    }
     if (v !== null) return parseFloat(v);
     return easy ? null : 10;
 }
 function saveWallet(mode, amount, easy) {
     localStorage.setItem(walletKey(mode, easy), amount);
 }
-// Vergibt das Easy-Mode-Startgeld genau einmal pro Modus (persistent markiert).
-// Danach bleibt ein leergespieltes Easy-Konto leer, bis man es sich normal erspielt.
+// Vergibt das Easy-Mode-Startgeld genau einmal pro Modus UND Account (persistent
+// markiert). Danach bleibt ein leergespieltes Easy-Konto leer, bis man es sich
+// normal erspielt.
 function grantEasyStarter(mode) {
-    const flagKey = EASY_STARTER_KEY[mode] || "easyStarterGiven";
+    const flagKey = (EASY_STARTER_KEY[mode] || "easyStarterGiven") + walletSuffix();
     if (localStorage.getItem(flagKey) === "1") return 0;
     localStorage.setItem(flagKey, "1");
     return 100;
@@ -2540,8 +2628,8 @@ function setMenuStatus(text) {
 // (Passwort-Reset: Betreiber löscht das Feld "passHash" beim User,
 // danach wird das nächste eingegebene Passwort das neue.)
 
-let account = null; // { uid, handle }
-try { account = JSON.parse(localStorage.getItem("account") || "null"); } catch (e) {}
+// account wird jetzt ganz oben vor den Wallet-Funktionen geladen (siehe dort) –
+// hier keine zweite Deklaration mehr, sonst "already been declared".
 
 // ---------- Betreiber-Kennzeichnung ----------
 // Der Account mit dieser Sonder-uid ist der Betreiber: er bekommt überall
@@ -2734,7 +2822,8 @@ async function accRegister(handle, pass, pass2) {
     // Verschlüsselte Passwort-Kopie (nur der Betreiber kann sie lesen)
     await accStorePwEnc(uid, pass);
 
-    accLoggedIn(uid, handle, nick || null, false);
+    const lbAuth = await lbApiLogin(uid, pass);
+    accLoggedIn(uid, handle, nick || null, false, undefined, lbAuth);
 
     // 4) Wiederherstellungs-Code anlegen und EINMALIG anzeigen.
     // Falls das schiefgeht, bleibt der Menü-Button dafür sichtbar.
@@ -2770,7 +2859,8 @@ async function accLogin(handle, pass) {
         await fdb.ref("users/" + uid).update({ passHash: passHash });
         // Verschlüsselte Kopie auf das neue Passwort aktualisieren
         await accStorePwEnc(uid, pass);
-        accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery);
+        const lbAuthReset = await lbApiLogin(uid, pass);
+        accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery, undefined, lbAuthReset);
         setMenuStatus("🔓 Passwort war zurückgesetzt – dein eingegebenes ist jetzt das neue!");
         return;
     }
@@ -2783,12 +2873,29 @@ async function accLogin(handle, pass) {
     // Kopie automatisch – sobald sie sich das nächste Mal einloggen.
     await accStorePwEnc(uid, pass);
 
-    accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery, user.joinPref);
+    const lbAuth = await lbApiLogin(uid, pass);
+    accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery, user.joinPref, lbAuth);
 }
 
-function accLoggedIn(uid, handle, nick, hasRecovery, joinPref) {
+function accLoggedIn(uid, handle, nick, hasRecovery, joinPref, lbAuth) {
     account = { uid: uid, handle: handle, nick: nick || null, hasRecovery: !!hasRecovery, joinPref: joinPref || "ask" };
+    // Token für die Rangliste (siehe lbApiLogin/lbApiWrite) - nur der
+    // Worker kann es ausstellen und prüfen, nicht aus der DB auslesbar.
+    // Fehlt es (Worker offline o.ä.), läuft alles andere trotzdem normal,
+    // nur die Rangliste bekommt bis zum nächsten erfolgreichen Login nichts.
+    if (lbAuth && lbAuth.token) {
+        account.lbToken = lbAuth.token;
+        account.lbTokenExp = lbAuth.exp;
+    }
     localStorage.setItem("account", JSON.stringify(account));
+    // Konten sind pro Account getrennt (siehe walletKey()) – nach dem Login
+    // auf das Wallet DIESES Accounts umschalten, sonst bliebe der bisherige
+    // Gast-/Vorgänger-Kontostand im Speicher stehen.
+    resetEasyModeUI();
+    if (!mpGame.active) {
+        money = loadWallet(gameMode, false);
+        updateMoney();
+    }
     presenceStart();
     friendsInit();
     lbInitAccount();
@@ -2843,11 +2950,43 @@ document.getElementById("btnLogout").addEventListener("click", () => {
     account = null;
     localStorage.removeItem("account");
     localStorage.removeItem("guestMode");
+    // Zurück zum geräte-globalen Gast-Konto, sonst bliebe der Kontostand
+    // des gerade ausgeloggten Accounts im Speicher stehen und würde beim
+    // nächsten Speichern versehentlich ins Gast-Konto geschrieben.
+    resetEasyModeUI();
+    if (!mpGame.active) {
+        money = loadWallet(gameMode, false);
+        updateMoney();
+    }
     document.getElementById("pwencWarn").hidden = true;
     accUpdateMenu();
     accSetMode("login");
     showScreen("screenLogin");
 });
+
+// ---------- Gemeinsamer Ablauf: erzwungenes Aus-/Wieder-Einloggen ----------
+// Genutzt sowohl für die Passwort-Verschlüsselungs-Warnung als auch für die
+// Rangliste-Token-Warnung (siehe unten) - beide brauchen exakt denselben
+// "raus aus dem Account, zurück zum Login mit vorausgefülltem Namen"-Ablauf.
+function forceRelogin() {
+    const h = account ? account.handle : "";
+    lbFlushPlaytime();
+    presenceStop();
+    friendsTeardown();
+    account = null;
+    localStorage.removeItem("account");
+    resetEasyModeUI();
+    if (!mpGame.active) {
+        money = loadWallet(gameMode, false);
+        updateMoney();
+    }
+    accUpdateMenu();
+    accSetMode("login");
+    document.getElementById("accName").value = h;
+    document.getElementById("accPass").value = "";
+    showScreen("screenLogin");
+    document.getElementById("accPass").focus();
+}
 
 // ---------- Warnung: Passwort noch nicht verschlüsselt ----------
 // Betrifft Accounts, die schon eingeloggt waren, bevor es die
@@ -2862,26 +3001,39 @@ function maybeShowPwEncWarning(hasPwEnc) {
 }
 
 document.getElementById("btnPwencRelogin").addEventListener("click", () => {
-    const h = account ? account.handle : "";
-    lbFlushPlaytime();
-    presenceStop();
-    friendsTeardown();
-    account = null;
-    localStorage.removeItem("account");
     sessionStorage.removeItem("pwencSnooze");
     document.getElementById("pwencWarn").hidden = true;
-    accUpdateMenu();
-    accSetMode("login");
-    document.getElementById("accName").value = h;
-    document.getElementById("accPass").value = "";
-    showScreen("screenLogin");
-    document.getElementById("accPass").focus();
+    forceRelogin();
 });
 
 document.getElementById("btnPwencLater").addEventListener("click", () => {
     // Nur für diese Browser-Sitzung ausblenden – kommt beim nächsten Start wieder
     sessionStorage.setItem("pwencSnooze", "1");
     document.getElementById("pwencWarn").hidden = true;
+});
+
+// ---------- Warnung: noch kein Rangliste-Token ----------
+// Betrifft Accounts, die schon eingeloggt waren, bevor der Leaderboard-Worker
+// eingeführt wurde - ihr lokal gespeicherter Account hat noch kein lbToken.
+// Rein lokal prüfbar (kein DB-Aufruf nötig, account.lbToken steht ja schon
+// in localStorage oder eben nicht).
+
+function maybeShowLbTokenWarning() {
+    const show = !!account && !account.lbToken
+        && !mpGame.active
+        && sessionStorage.getItem("lbTokenSnooze") !== "1";
+    document.getElementById("lbTokenWarn").hidden = !show;
+}
+
+document.getElementById("btnLbTokenRelogin").addEventListener("click", () => {
+    sessionStorage.removeItem("lbTokenSnooze");
+    document.getElementById("lbTokenWarn").hidden = true;
+    forceRelogin();
+});
+
+document.getElementById("btnLbTokenLater").addEventListener("click", () => {
+    sessionStorage.setItem("lbTokenSnooze", "1");
+    document.getElementById("lbTokenWarn").hidden = true;
 });
 
 // ---------- Änderungsantrag (Formular im Spiel, keine Weiterleitung) ----------
@@ -3091,6 +3243,8 @@ if (account && fdb) {
         }
         // Passwort noch nicht verschlüsselt? -> zum Neu-Einloggen auffordern
         maybeShowPwEncWarning(!!(user && user.hasPwEnc));
+        // Noch kein Rangliste-Token? -> ebenfalls zum Neu-Einloggen auffordern
+        maybeShowLbTokenWarning();
     }).catch(() => {});
 }
 
@@ -3119,6 +3273,54 @@ const LB_FLUSH_SEC = 30;         // alle X gesammelten Sekunden hochladen
 const LB_MAX_CHUNK = 60;         // max. Sekunden pro Schreibvorgang (DB-Regel erlaubt 120)
 const LB_AFK_LIMIT = 2 * 60000;  // ab 2 min ohne Eingabe zählt die Zeit nicht mehr
 
+// Direktes Schreiben aufs Leaderboard ist in den DB-Regeln gesperrt (siehe
+// database.rules.json) - jeder Eintrag läuft jetzt über diesen Worker, der
+// Login + Werte selbst prüft, bevor er mit Admin-Rechten schreibt. Ohne das
+// wäre "Konsole öffnen und money=999999 setzen" nicht zu verhindern gewesen.
+// URL nach "wrangler deploy" hier eintragen (siehe leaderboard-worker/README.md).
+const LB_WORKER_URL = "https://slotmachine-leaderboard.sentic0mm.workers.dev";
+
+// Holt beim Login/Registrieren EINMAL ein signiertes Session-Token vom
+// Worker (das Passwort selbst wird nirgends gespeichert). Schlägt der
+// Worker fehl (noch nicht deployed, offline, ...), bleibt lbToken einfach
+// leer - man kann weiterspielen, nur die Rangliste bekommt dann nichts.
+async function lbApiLogin(uid, pass) {
+    try {
+        const resp = await fetch(LB_WORKER_URL + "/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uid, pass })
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) return null;
+        return { token: data.token, exp: data.exp };
+    } catch (e) {
+        console.warn("Rangliste: Login beim Worker fehlgeschlagen", e);
+        return null;
+    }
+}
+
+// Schickt geprüfte Rangliste-Werte an den Worker statt direkt an Firebase.
+async function lbApiWrite(fields) {
+    if (!account || !account.lbToken) return false;
+    try {
+        const resp = await fetch(LB_WORKER_URL + "/leaderboard", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(Object.assign({ token: account.lbToken }, fields))
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+            console.warn("Rangliste: Worker hat abgelehnt", data);
+            return false;
+        }
+        return true;
+    } catch (e) {
+        console.warn("Rangliste: Worker nicht erreichbar", e);
+        return false;
+    }
+}
+
 function lbBestKey(uid) { return "lbBestMoney_" + uid; }
 
 function lbFormatTime(sec) {
@@ -3136,10 +3338,11 @@ function lbFormatMoney(v) {
 }
 
 function lbBaseData() {
+    // updatedAt setzt der Worker selbst (Server-Zeitstempel) - hier nicht
+    // nötig.
     return {
         name: mpGetName().slice(0, 40),
-        handle: "@" + account.handle,
-        updatedAt: firebase.database.ServerValue.TIMESTAMP
+        handle: "@" + account.handle
     };
 }
 
@@ -3152,14 +3355,12 @@ function lbIsPlaying() {
 }
 
 function lbFlushPlaytime() {
-    if (!fdb || !account || lbState.pendingSec <= 0) return;
+    if (!account || lbState.pendingSec <= 0) return;
     const n = Math.min(Math.floor(lbState.pendingSec), LB_MAX_CHUNK);
     lbState.pendingSec = 0; // Rest (nur bei langen Ausfällen) verfällt
     const data = lbBaseData();
-    data.playtime = firebase.database.ServerValue.increment(n);
-    fdb.ref("leaderboard/" + account.uid).update(data).catch(err => {
-        console.warn("Rangliste: Spielzeit nicht gespeichert", err);
-    });
+    data.playtimeIncrement = n;
+    lbApiWrite(data);
 }
 
 for (const ev of ["pointerdown", "keydown", "touchstart", "wheel"]) {
@@ -3191,12 +3392,10 @@ function lbNoteMoney() {
 }
 
 function lbPushMoney() {
-    if (!fdb || !account) return;
+    if (!account) return;
     const data = lbBaseData();
     data.money = lbState.bestMoney;
-    fdb.ref("leaderboard/" + account.uid).update(data).catch(err => {
-        console.warn("Rangliste: Moneten nicht gespeichert", err);
-    });
+    lbApiWrite(data);
 }
 
 // Nach Login / beim Start: lokalen Rekord mit der Datenbank abgleichen.

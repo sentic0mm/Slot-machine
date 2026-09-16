@@ -1,0 +1,17 @@
+name = "slotmachine-leaderboard"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+
+# Öffentliche Firebase-Projektdaten (kein Geheimnis, stehen genauso im
+# Client-Code von index.html) - hier NICHT als Secret, sondern als normale
+# Variable, damit sie bei "wrangler deploy" ohne Rückfrage mitkommt.
+[vars]
+FIREBASE_DB_URL = "https://slot-machine-multiplayer-default-rtdb.europe-west1.firebasedatabase.app"
+
+# Erlaubte Origins für CORS (Komma-getrennt). GitHub Pages + lokale Tests.
+ALLOWED_ORIGINS = "https://sentic0mm.github.io,http://localhost:8377,http://127.0.0.1:8377"
+
+# Echte Geheimnisse werden NICHT hier eingetragen, sondern per
+#   npx wrangler secret put FIREBASE_SERVICE_ACCOUNT_KEY
+#   npx wrangler secret put WORKER_SECRET
+# gesetzt (siehe README.md in diesem Ordner).

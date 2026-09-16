@@ -1,0 +1,14 @@
+{
+  "name": "leaderboard-worker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Vertrauenswürdiger Schreib-Endpunkt für die Weltweite Rangliste von 'gamblen ist toll'. Prüft Login + Werte serverseitig, bevor irgendwas in die Firebase-Datenbank geschrieben wird.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.86.0"
+  }
+}
