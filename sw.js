@@ -1,6 +1,6 @@
 // Cache-Version: bei jedem größeren Update hochzählen (v2 -> v3 ...).
 // Das erzwingt, dass alte Caches gelöscht werden.
-const CACHE = 'slots-v37';
+const CACHE = 'slots-v38';
 const ASSETS = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', e => {
@@ -22,6 +22,14 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const req = e.request;
+
+  // Nur GET lässt sich überhaupt cachen (Cache.put() wirft bei POST/PUT/...
+  // einen Fehler). Betrifft z.B. die POST-Aufrufe an den Leaderboard-Worker -
+  // die einfach ganz normal ans Netzwerk durchreichen, ohne Cache-Umweg.
+  if (req.method !== 'GET') {
+    e.respondWith(fetch(req));
+    return;
+  }
 
   // HTML / Seitenaufrufe: ZUERST Netzwerk, damit Updates (z.B. Multiplayer)
   // sofort ankommen. Nur wenn offline -> Cache als Fallback.
