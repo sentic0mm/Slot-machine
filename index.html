@@ -272,6 +272,26 @@ input {
     border-color: #ff0000;
 }
 
+#btnOnlineToggle {
+    background: #222;
+    color: white;
+    border: 1px solid #444;
+    padding: 12px 15px;
+    font-size: 16px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: 0.2s;
+    user-select: none;
+    display: inline-block;
+    box-sizing: border-box;
+}
+#btnOnlineToggle:hover { background: #333; }
+#btnOnlineToggle.offline-active {
+    background: #3a2a00;
+    border-color: #ffa500;
+    color: #ffd699;
+}
+
 #btnRefresh {
     background: #222;
     color: white;
@@ -1648,7 +1668,9 @@ body.mp-active .save-buttons {
 
         <button id="btnReset">🗑 Reset (Cache leeren)</button>
 
-        <div class="save-buttons">
+        <button id="btnOnlineToggle" hidden>🌐 Online</button>
+
+        <div class="save-buttons" id="saveButtons">
         <button id="btnExport">💾 Export Save</button>
             <label class="import-btn">
              📂 Import Save
@@ -1719,6 +1741,12 @@ body.mp-active .save-buttons {
 }
 
 async function exportSave() {
+    // Nur für Gäste - bei einem eingeloggten Account könnte man sich damit
+    // nach einem Verlust sonst einfach einen alten, reicheren Stand
+    // zurückladen (Save-Scumming). Buttons sind für Accounts zwar schon
+    // versteckt, das hier blockt zusätzlich einen direkten Konsolen-Aufruf.
+    if (account && !offlineMode) { alert("Export/Import gibt es nur als Gast oder im Offline-Konto - dein Online-Konto zählt für die Rangliste."); return; }
+
     // Save trägt jetzt den Modus ("system"): Klassisch und MEGA sind
     // getrennte Save-Systeme mit eigener Datei.
     const saveData = {
@@ -1752,6 +1780,10 @@ async function exportSave() {
 
 // Lädt einen geprüften Save in die passende Geldbörse und stellt den Modus um
 function applyImportedSave(saveData) {
+    // Nur für Gäste - siehe exportSave(). Zentral hier geblockt, damit auch
+    // ein direkter Konsolen-Aufruf von applyImportedSave() nichts bringt.
+    if (account && !offlineMode) { alert("Import gibt es nur als Gast oder im Offline-Konto - dein Online-Konto zählt für die Rangliste."); return gameMode; }
+
     // gültige Systeme; alte Saves ohne Feld = Klassisch
     const sys = ["mega", "ultra"].includes(saveData.system) ? saveData.system : "classic";
     resetEasyModeUI(); // ein importierter Save ist immer ein normales Konto, nie das Easy-Konto
@@ -1791,6 +1823,14 @@ let gameMode = "classic";
 let account = null; // { uid, handle }
 try { account = JSON.parse(localStorage.getItem("account") || "null"); } catch (e) {}
 
+// Accounts können zwischen Online (an die Rangliste gebunden, kein Easy Mode,
+// kein Save-Export/Import - sonst könnte man nach Verlust einfach einen alten
+// reicheren Stand zurückladen) und Offline (komplett eigenes, zweites Konto,
+// wie ein Gast - volle Kontrolle, aber zählt nirgends) wechseln. Setzt sich
+// bei jedem Login neu auf "online" zurück, wie easyMode auch nie über einen
+// Login hinweg gemerkt wird.
+let offlineMode = false;
+
 const WALLET_KEY = { classic: "money", mega: "moneyMega", ultra: "moneyUltra" };
 // Easy Mode bekommt pro Spielmodus eine komplett eigene Geldbörse. Vorher lief
 // Easy Mode über dasselbe Konto wie normal – dadurch flossen im Easy Mode
@@ -1806,7 +1846,8 @@ const EASY_STARTER_KEY = { classic: "easyStarterGiven", mega: "easyStarterGivenM
 // Kontostand geteilt. Gäste (account === null) bleiben weiter geräte-global,
 // da sie keine feste Identität zum Binden haben.
 function walletSuffix() {
-    return (account && account.uid) ? "_" + account.uid : "";
+    if (!account || !account.uid) return "";
+    return "_" + account.uid + (offlineMode ? "_offline" : "");
 }
 function walletKey(mode, easy) {
     const base = (easy ? WALLET_KEY_EASY[mode] : WALLET_KEY[mode]) || (easy ? "moneyEasy" : "money");
@@ -1817,7 +1858,9 @@ function walletKey(mode, easy) {
 function loadWallet(mode, easy) {
     const key = walletKey(mode, easy);
     let v = localStorage.getItem(key);
-    if (v === null && account && account.uid) {
+    if (v === null && account && account.uid && !offlineMode) {
+        // Nur das Online-Konto migriert (Offline ist ein brandneues, eigenes
+        // Konto ohne Vorgänger - da gibt's nichts zu übernehmen).
         // Einmalige Migration (pro Gerät, nicht pro Account!): der alte
         // geräte-globale Kontostand von VOR der Account-Bindung geht genau
         // einmal an den ersten Account über, der ihn hier abruft. Das Flag
@@ -2413,6 +2456,7 @@ document.getElementById("btnRefresh").addEventListener("click", () => {
 // Easy Mode an/aus schalten – eigenes Konto pro Modus, kein Freigeld auf Knopfdruck.
 document.getElementById("btnEasy").addEventListener("click", () => {
     if (spinning) return; // nicht mitten im Spin umschalten
+    if (account && !offlineMode) return; // online nicht erlaubt (siehe updateOnlineOfflineUI)
 
     saveWallet(gameMode, money, easyMode); // aktuelles Konto sichern, bevor umgeschaltet wird
     easyMode = !easyMode;
@@ -2890,7 +2934,9 @@ function accLoggedIn(uid, handle, nick, hasRecovery, joinPref, lbAuth) {
     localStorage.setItem("account", JSON.stringify(account));
     // Konten sind pro Account getrennt (siehe walletKey()) – nach dem Login
     // auf das Wallet DIESES Accounts umschalten, sonst bliebe der bisherige
-    // Gast-/Vorgänger-Kontostand im Speicher stehen.
+    // Gast-/Vorgänger-Kontostand im Speicher stehen. Startet immer online
+    // (wie easyMode auch nie über einen Login hinweg gemerkt wird).
+    offlineMode = false;
     resetEasyModeUI();
     if (!mpGame.active) {
         money = loadWallet(gameMode, false);
@@ -2948,6 +2994,7 @@ document.getElementById("btnLogout").addEventListener("click", () => {
     presenceStop();
     friendsTeardown();
     account = null;
+    offlineMode = false;
     localStorage.removeItem("account");
     localStorage.removeItem("guestMode");
     // Zurück zum geräte-globalen Gast-Konto, sonst bliebe der Kontostand
@@ -2974,6 +3021,7 @@ function forceRelogin() {
     presenceStop();
     friendsTeardown();
     account = null;
+    offlineMode = false;
     localStorage.removeItem("account");
     resetEasyModeUI();
     if (!mpGame.active) {
@@ -3122,6 +3170,39 @@ document.getElementById("btnReqSend").addEventListener("click", async () => {
     }
 });
 
+// ---------- Online / Offline (nur für Accounts) ----------
+// Online: normales Konto, zählt für die Rangliste, kein Easy Mode, kein
+// Save-Export/Import (siehe walletSuffix/lbNoteMoney - sonst könnte man nach
+// einem Verlust einfach einen alten, reicheren Stand zurückladen).
+// Offline: komplett eigenes zweites Konto (wie ein Gast) - Easy Mode und
+// Save-Export/Import verfügbar, zählt aber nirgends für die Rangliste.
+function updateOnlineOfflineUI() {
+    const btn = document.getElementById("btnOnlineToggle");
+    btn.hidden = !account; // für Gäste ergibt der Umschalter keinen Sinn
+    if (account) {
+        btn.innerText = offlineMode ? "📴 Offline" : "🌐 Online";
+        btn.classList.toggle("offline-active", offlineMode);
+    }
+
+    const restricted = !!account && !offlineMode; // "online" mit Account
+    document.getElementById("saveButtons").hidden = restricted;
+    document.getElementById("btnEasy").hidden = restricted;
+}
+
+document.getElementById("btnOnlineToggle").addEventListener("click", () => {
+    if (!account || spinning) return;
+    saveWallet(gameMode, money, easyMode); // aktuelles Konto sichern, bevor umgeschaltet wird
+    offlineMode = !offlineMode;
+    if (!offlineMode) resetEasyModeUI(); // Easy Mode ist online nicht erlaubt
+    money = loadWallet(gameMode, easyMode);
+    updateMoney();
+    updateOnlineOfflineUI();
+    statusBox.className = "status";
+    statusBox.innerText = offlineMode
+        ? "📴 Offline-Konto – zählt nicht für die Rangliste, dafür Easy Mode & Save-Export/Import verfügbar."
+        : "🌐 Online-Konto – zählt für die Rangliste.";
+});
+
 function accUpdateMenu() {
     const info = document.getElementById("accountInfo");
     const tag = document.getElementById("accountTag");
@@ -3144,6 +3225,7 @@ function accUpdateMenu() {
     document.getElementById("btnMakeRecovery").hidden = !account || !!account.hasRecovery;
     document.getElementById("btnChangeRequest").hidden = !account;
     document.getElementById("btnLogout").hidden = !account;
+    updateOnlineOfflineUI();
 
     friendUpdateHamburger();
     friendUpdateBadge();
@@ -3381,7 +3463,7 @@ window.addEventListener("pagehide", lbFlushPlaytime);
 
 // ----- Moneten-Rekord -----
 function lbNoteMoney() {
-    if (!lbState.ready || !account || easyMode || mpGame.active || mpRole) return;
+    if (!lbState.ready || !account || easyMode || offlineMode || mpGame.active || mpRole) return;
     const v = Math.round((Number(money) || 0) * 100) / 100;
     if (!(v > lbState.bestMoney) || !isFinite(v)) return;
     lbState.bestMoney = v;
