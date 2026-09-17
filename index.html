@@ -3087,12 +3087,26 @@ document.getElementById("btnPwencLater").addEventListener("click", () => {
 // Rein lokal prüfbar (kein DB-Aufruf nötig, account.lbToken steht ja schon
 // in localStorage oder eben nicht).
 
+// Prüft nicht nur "gibt es ein Token", sondern auch "ist es noch gültig" -
+// ein abgelaufenes Token sah vorher genauso aus wie ein vorhandenes und
+// scheiterte dann still bei jedem Sync-Versuch (nur eine Konsolen-Warnung,
+// die niemand sieht).
+function lbTokenValid() {
+    return !!(account && account.lbToken && account.lbTokenExp
+        && account.lbTokenExp > Math.floor(Date.now() / 1000));
+}
+
 function maybeShowLbTokenWarning() {
-    const show = !!account && !account.lbToken
+    const show = !!account && !lbTokenValid()
         && !mpGame.active
         && sessionStorage.getItem("lbTokenSnooze") !== "1";
     document.getElementById("lbTokenWarn").hidden = !show;
 }
+
+// Zusätzlich zum Start-Check auch periodisch prüfen - eine lange offene
+// Seite lädt ja nicht neu, würde ein zwischenzeitliches Ablaufen sonst nie
+// bemerken.
+setInterval(maybeShowLbTokenWarning, 10 * 60 * 1000);
 
 document.getElementById("btnLbTokenRelogin").addEventListener("click", () => {
     sessionStorage.removeItem("lbTokenSnooze");
@@ -3405,7 +3419,7 @@ async function lbApiLogin(uid, pass) {
 
 // Schickt geprüfte Rangliste-Werte an den Worker statt direkt an Firebase.
 async function lbApiWrite(fields) {
-    if (!account || !account.lbToken) return false;
+    if (!lbTokenValid()) { maybeShowLbTokenWarning(); return false; }
     try {
         const resp = await fetch(LB_WORKER_URL + "/leaderboard", {
             method: "POST",
@@ -3428,7 +3442,7 @@ async function lbApiWrite(fields) {
 // Rangliste-Rekord) - damit derselbe Account auf einem anderen Gerät
 // denselben Stand sieht statt bei 10$ neu zu starten.
 async function lbApiWalletSync(mode, amount) {
-    if (!account || !account.lbToken) return false;
+    if (!lbTokenValid()) { maybeShowLbTokenWarning(); return false; }
     try {
         const resp = await fetch(LB_WORKER_URL + "/wallet", {
             method: "POST",

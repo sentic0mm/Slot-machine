@@ -32,7 +32,16 @@
 // dieser Worker das Passwort selbst und stellt ein eigenes, nur ihm bekanntes
 // Token aus.
 
-const TOKEN_TTL_SEC = 12 * 60 * 60;      // Session-Token 12h gültig
+const TOKEN_TTL_SEC = 30 * 24 * 60 * 60; // Session-Token 30 Tage gültig - war
+                                          // erst 12h, das lief bei längeren
+                                          // Sessions einfach still ab (Client
+                                          // prüfte nur "Token vorhanden?",
+                                          // nicht "noch gültig?") und Sync
+                                          // brach unbemerkt ab. Jetzt lang
+                                          // genug, dass das praktisch nicht
+                                          // mehr vorkommt - Client-seitig
+                                          // trotzdem der Vollständigkeit
+                                          // halber ergänzt (siehe index.html).
 const LB_PLAYTIME_MAX_DELTA = 120;       // wie zuvor in database.rules.json
 const NAME_MAX = 40;
 const HANDLE_MAX = 20;
