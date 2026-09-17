@@ -1948,7 +1948,8 @@ let mpBusy = false;       // verhindert Doppelklick beim Erstellen/Beitreten
 // Zustand der weltweiten Rangliste – hier oben, weil updateMoney() schon
 // beim Laden aufgerufen wird (die eigentliche Logik steht weiter unten).
 const lbState = { ready: false, tab: "playtime", ref: null, pendingSec: 0,
-                  lastInput: Date.now(), bestMoney: 0, moneyTimer: null };
+                  lastInput: Date.now(), bestMoney: 0, moneyTimer: null,
+                  walletSyncTimer: null };
 
 function saveMoney() {
     saveWallet(gameMode, money, easyMode);
@@ -1967,6 +1968,7 @@ function updateMoney() {
     } else {
         saveMoney();
         lbNoteMoney();
+        lbNoteWalletSync();
     }
 }
 
@@ -2948,6 +2950,16 @@ function accLoggedIn(uid, handle, nick, hasRecovery, joinPref, lbAuth) {
     offlineMode = false;
     resetEasyModeUI();
     if (!mpGame.active) {
+        // Server-Kontostand übernimmt (pro Modus), falls vorhanden - so
+        // sieht ein zweites Gerät denselben Stand statt bei 10$ neu zu
+        // starten. Fehlt er (allererster Sync), bleibt der lokale Stand
+        // unangetastet und wird beim nächsten updateMoney() hochgesynct.
+        if (lbAuth && lbAuth.wallet) {
+            for (const m of ["classic", "mega", "ultra"]) {
+                const wv = Number(lbAuth.wallet[m]);
+                if (Number.isFinite(wv)) saveWallet(m, wv, false);
+            }
+        }
         money = loadWallet(gameMode, false);
         updateMoney();
     }
@@ -3384,7 +3396,7 @@ async function lbApiLogin(uid, pass) {
         });
         const data = await resp.json();
         if (!resp.ok || !data.ok) return null;
-        return { token: data.token, exp: data.exp };
+        return { token: data.token, exp: data.exp, wallet: data.wallet || {} };
     } catch (e) {
         console.warn("Rangliste: Login beim Worker fehlgeschlagen", e);
         return null;
@@ -3408,6 +3420,29 @@ async function lbApiWrite(fields) {
         return true;
     } catch (e) {
         console.warn("Rangliste: Worker nicht erreichbar", e);
+        return false;
+    }
+}
+
+// Meldet den echten, aktuell einsetzbaren Online-Kontostand (nicht nur den
+// Rangliste-Rekord) - damit derselbe Account auf einem anderen Gerät
+// denselben Stand sieht statt bei 10$ neu zu starten.
+async function lbApiWalletSync(mode, amount) {
+    if (!account || !account.lbToken) return false;
+    try {
+        const resp = await fetch(LB_WORKER_URL + "/wallet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: account.lbToken, mode, amount })
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+            console.warn("Kontostand-Sync: Worker hat abgelehnt", data);
+            return false;
+        }
+        return true;
+    } catch (e) {
+        console.warn("Kontostand-Sync: Worker nicht erreichbar", e);
         return false;
     }
 }
@@ -3518,9 +3553,15 @@ setInterval(() => {
 
 // Beim Tab-Wechsel / Schließen den Rest noch schnell wegschicken
 document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") lbFlushPlaytime();
+    if (document.visibilityState === "hidden") {
+        lbFlushPlaytime();
+        if (lbState.walletSyncTimer) { clearTimeout(lbState.walletSyncTimer); lbPushWalletSync(); }
+    }
 });
-window.addEventListener("pagehide", lbFlushPlaytime);
+window.addEventListener("pagehide", () => {
+    lbFlushPlaytime();
+    if (lbState.walletSyncTimer) { clearTimeout(lbState.walletSyncTimer); lbPushWalletSync(); }
+});
 
 // ----- Moneten-Rekord -----
 function lbNoteMoney() {
@@ -3539,6 +3580,25 @@ function lbPushMoney() {
     const data = lbBaseData();
     data.money = lbState.bestMoney;
     lbApiWrite(data);
+}
+
+// ----- Echter Online-Kontostand (Cross-Device-Sync) -----
+// Anders als lbNoteMoney() (nur der Rangliste-REKORD) reagiert das auf
+// JEDE Änderung, auch Verluste - damit derselbe Account auf einem zweiten
+// Gerät denselben Stand sieht statt bei 10$ neu zu starten.
+function lbNoteWalletSync() {
+    if (!account || offlineMode || mpGame.active || mpRole) return;
+    clearTimeout(lbState.walletSyncTimer);
+    lbState.walletSyncTimer = setTimeout(lbPushWalletSync, 3000);
+}
+
+// Liest gameMode/money erst beim tatsächlichen Absenden (nicht beim
+// Timer-Start) - so geht bei mehreren schnellen Änderungen immer der
+// aktuellste Stand raus, nicht ein zwischenzeitlich veralteter.
+function lbPushWalletSync() {
+    lbState.walletSyncTimer = null;
+    if (!account || offlineMode) return;
+    lbApiWalletSync(gameMode, money);
 }
 
 // Nach Login / beim Start: lokalen Rekord mit der Datenbank abgleichen.

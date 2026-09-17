@@ -13,7 +13,18 @@
 //      höchstens das 1000-fache des bisherigen Werts sein - siehe
 //      MONEY_GROWTH_FACTOR, blockt "Konsole auf, Fantasiezahl eintippen"),
 //      und schreibt danach MIT ADMIN-RECHTEN nach leaderboard/<uid> - an den
-//      (jetzt für Clients gesperrten) DB-Regeln vorbei.
+//      (jetzt für Clients gesperrten) DB-Regeln vorbei. Das ist nur der
+//      Rangliste-REKORD (höchster je erreichter Stand), nicht der aktuell
+//      einsetzbare Kontostand - siehe walletSync unten.
+//   3) POST /wallet  { token, mode, amount } -> der ECHTE, aktuell
+//      einsetzbare Online-Kontostand (getrennt pro Modus: classic/mega/
+//      ultra), damit derselbe Account auf einem zweiten Gerät denselben
+//      Stand sieht statt bei 10$ neu zu starten. Verluste (amount sinkt)
+//      immer erlaubt, Zuwächse mit derselben Zuwachsrate-Grenze wie money
+//      oben. Landet in walletSync/<uid> - komplett gesperrt für Clients
+//      (auch Lesen), nur über /login (liefert den Stand mit) und /wallet
+//      erreichbar, da es (anders als die öffentliche Rangliste) niemand
+//      sonst etwas angeht.
 //
 // Warum nicht einfach den in der DB gespeicherten passHash vergleichen?
 // users/<uid> (inkl. passHash) ist laut DB-Regeln öffentlich lesbar - jeder
@@ -33,6 +44,17 @@ const HANDLE_MAX = 20;
 // vierstelligen Gewinn nicht am *1000 von quasi-Null scheitert.
 const MONEY_GROWTH_FACTOR = 1000;
 const MONEY_MIN_JUMP = 10000;
+const WALLET_MODES = ["classic", "mega", "ultra"];
+
+// Prüft, ob ein Zuwachs von cur -> v plausibel ist (siehe MONEY_GROWTH_FACTOR
+// oben). Verluste (v <= cur) sind hier immer erlaubt, nur Zuwächse werden
+// begrenzt - genutzt sowohl für den Rangliste-Rekord als auch für den
+// echten Kontostand-Sync.
+function isMoneyJumpOk(cur, v) {
+  if (v <= cur) return true;
+  const maxAllowed = Math.max(cur * MONEY_GROWTH_FACTOR, cur + MONEY_MIN_JUMP);
+  return v <= maxAllowed;
+}
 
 export default {
   async fetch(request, env) {
@@ -50,6 +72,8 @@ export default {
         resp = await handleLogin(request, env);
       } else if (request.method === "POST" && url.pathname === "/leaderboard") {
         resp = await handleLeaderboardWrite(request, env);
+      } else if (request.method === "POST" && url.pathname === "/wallet") {
+        resp = await handleWalletSync(request, env);
       } else {
         resp = jsonResponse({ ok: false, error: "not_found" }, 404);
       }
@@ -90,8 +114,19 @@ async function handleLogin(request, env) {
 
   const now = Math.floor(Date.now() / 1000);
   const token = await signToken({ uid, exp: now + TOKEN_TTL_SEC }, env.WORKER_SECRET);
+
+  // Gespeicherten Online-Kontostand gleich mitliefern (ein Roundtrip
+  // gespart) - fehlt er (Account noch nie online gesynct), bleibt wallet
+  // leer, der Client behält dann seinen bisherigen lokalen Stand.
+  let wallet = null;
+  try {
+    wallet = await fbGet(env, "walletSync/" + encodeURIComponent(uid) + ".json");
+  } catch (e) {
+    console.log("login " + uid + ": Kontostand konnte nicht geladen werden - " + String(e && e.message || e));
+  }
+
   console.log("login " + uid + ": erfolgreich, Token ausgestellt (gueltig bis " + new Date((now + TOKEN_TTL_SEC) * 1000).toISOString() + ")");
-  return jsonResponse({ ok: true, token, exp: now + TOKEN_TTL_SEC });
+  return jsonResponse({ ok: true, token, exp: now + TOKEN_TTL_SEC, wallet: wallet || {} });
 }
 
 async function handleLeaderboardWrite(request, env) {
@@ -145,9 +180,8 @@ async function handleLeaderboardWrite(request, env) {
     const currentRaw = await fbGet(env, "leaderboard/" + encodeURIComponent(uid) + "/money.json");
     if (currentRaw !== null) {
       const cur = Number(currentRaw) || 0;
-      const maxAllowed = Math.max(cur * MONEY_GROWTH_FACTOR, cur + MONEY_MIN_JUMP);
-      if (v > maxAllowed) {
-        console.log("leaderboard " + uid + ": money-Sprung abgelehnt (" + cur + " -> " + v + ", erlaubt bis " + maxAllowed + ")");
+      if (!isMoneyJumpOk(cur, v)) {
+        console.log("leaderboard " + uid + ": money-Sprung abgelehnt (" + cur + " -> " + v + ")");
         return jsonResponse({ ok: false, error: "bad_money_jump" }, 400);
       }
     }
@@ -164,6 +198,47 @@ async function handleLeaderboardWrite(request, env) {
 
   await fbPatch(env, "leaderboard/" + encodeURIComponent(uid) + ".json", update);
   console.log("leaderboard " + uid + ": erfolgreich geschrieben (" + Object.keys(update).filter(k => k !== "updatedAt").join(", ") + ")");
+  return jsonResponse({ ok: true });
+}
+
+// Echter, aktuell einsetzbarer Kontostand pro Modus - nicht der öffentliche
+// Rangliste-Rekord. Verluste immer erlaubt, Zuwächse mit derselben
+// Zuwachsrate-Grenze wie beim Rangliste-Geld.
+async function handleWalletSync(request, env) {
+  const body = await readJson(request);
+  const payload = await verifyToken(body.token, env.WORKER_SECRET);
+  if (!payload) {
+    console.log("wallet: Token ungueltig oder abgelaufen abgelehnt");
+    return jsonResponse({ ok: false, error: "invalid_token" }, 401);
+  }
+  const uid = payload.uid;
+
+  const mode = body.mode;
+  if (!WALLET_MODES.includes(mode)) {
+    console.log("wallet " + uid + ": unbekannter Modus abgelehnt (" + body.mode + ")");
+    return jsonResponse({ ok: false, error: "bad_mode" }, 400);
+  }
+
+  const v = Number(body.amount);
+  if (!Number.isFinite(v) || v < 0) {
+    console.log("wallet " + uid + "/" + mode + ": Betrag abgelehnt (Wert: " + body.amount + ", muss >= 0 sein)");
+    return jsonResponse({ ok: false, error: "bad_amount" }, 400);
+  }
+
+  const currentRaw = await fbGet(env, "walletSync/" + encodeURIComponent(uid) + "/" + mode + ".json");
+  if (currentRaw !== null) {
+    const cur = Number(currentRaw) || 0;
+    if (!isMoneyJumpOk(cur, v)) {
+      console.log("wallet " + uid + "/" + mode + ": Sprung abgelehnt (" + cur + " -> " + v + ")");
+      return jsonResponse({ ok: false, error: "bad_wallet_jump" }, 400);
+    }
+  }
+
+  const update = {};
+  update[mode] = v;
+  update.updatedAt = { ".sv": "timestamp" };
+  await fbPatch(env, "walletSync/" + encodeURIComponent(uid) + ".json", update);
+  console.log("wallet " + uid + "/" + mode + ": erfolgreich gespeichert (" + v + ")");
   return jsonResponse({ ok: true });
 }
 
