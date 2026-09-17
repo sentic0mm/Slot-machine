@@ -1,6 +1,6 @@
 // Cache-Version: bei jedem größeren Update hochzählen (v2 -> v3 ...).
 // Das erzwingt, dass alte Caches gelöscht werden.
-const CACHE = 'slots-v38';
+const CACHE = 'slots-v39';
 const ASSETS = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', e => {
@@ -33,10 +33,14 @@ self.addEventListener('fetch', e => {
 
   // HTML / Seitenaufrufe: ZUERST Netzwerk, damit Updates (z.B. Multiplayer)
   // sofort ankommen. Nur wenn offline -> Cache als Fallback.
+  // cache: 'no-store' erzwingt einen ECHTEN Netzwerk-Request - ohne das
+  // respektiert fetch() selbst wieder den normalen HTTP-Cache-Control-Header
+  // von GitHub Pages, und "zuerst Netzwerk" bekommt dann doch nur eine alte
+  // gecachte Antwort statt der neuesten Version.
   if (req.mode === 'navigate' ||
       (req.headers.get('accept') || '').includes('text/html')) {
     e.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'no-store' })
         .then(res => {
           const copy = res.clone();
           caches.open(CACHE).then(c => c.put(req, copy));
