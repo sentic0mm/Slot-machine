@@ -2278,10 +2278,16 @@ const SPIN_ERRORS = {
     busy: "⏳ Zu viele Spins gleichzeitig – kurz warten."
 };
 
-async function spinRemote(kind, bet) {
+// Nach einem Reload mitten in einer Spin-Serie: der Server gibt die Gewinne
+// erst frei, wenn die Spins "gelaufen" wären.
+function spinPendingText(waitMs) {
+    return "⏳ Deine letzten Spins laufen noch – noch " + Math.max(1, Math.ceil((waitMs || 0) / 1000)) + " s";
+}
+
+async function spinRemote(kind, bet, count) {
     const body = kind === "mp"
-        ? { token: account.lbToken, code: mpLobbyCode, pid: mpMyId, bet }
-        : { token: account.lbToken, mode: gameMode, bet };
+        ? { token: account.lbToken, code: mpLobbyCode, pid: mpMyId, bet, count: count || 1 }
+        : { token: account.lbToken, mode: gameMode, bet, count: count || 1 };
     let resp, data;
     try {
         resp = await fetch(LB_WORKER_URL + (kind === "mp" ? "/mp/spin" : "/spin"), {
@@ -2295,7 +2301,9 @@ async function spinRemote(kind, bet) {
     }
     if (!resp.ok || !data.ok) {
         if (data && data.error === "invalid_token") maybeShowLbTokenWarning();
-        const err = new Error(SPIN_ERRORS[data && data.error] || ("❌ Fehler: " + (data && data.error)));
+        const err = new Error(data && data.error === "pending"
+            ? spinPendingText(data.waitMs)
+            : SPIN_ERRORS[data && data.error] || ("❌ Fehler: " + (data && data.error)));
         if (data && typeof data.balance === "number") err.balance = data.balance;
         throw err;
     }
@@ -2317,6 +2325,14 @@ async function lbRefreshBalances() {
         if (!spinning && !mpGame.active && !easyMode) {
             money = data.balances[gameMode];
             updateMoney();
+            const wait = data.waitMs && data.waitMs[gameMode];
+            if (wait) {
+                statusBox.className = "status";
+                statusBox.innerText = spinPendingText(wait);
+                // Danach den freigegebenen Endstand holen
+                clearTimeout(lbRefreshBalances.timer);
+                lbRefreshBalances.timer = setTimeout(lbRefreshBalances, wait + 300);
+            }
         }
     } catch (e) {}
 }
@@ -2356,6 +2372,29 @@ async function startSpin() {
     lever.classList.add("lever-pulled");
     setTimeout(() => lever.classList.remove("lever-pulled"), 250);
 
+    // Online-Konto / Multiplayer: der Server würfelt ALLE Spins dieser Serie
+    // auf einmal (eine Anfrage statt einer pro Spin) - hier werden sie dann
+    // nur noch nacheinander abgespielt.
+    const remoteKind = spinRemoteKind();
+    let batch = null;
+    if (remoteKind) {
+        statusBox.className = "status";
+        statusBox.innerText = "🎰 Dreht...";
+        try {
+            batch = await spinRemote(remoteKind, bet, spins);
+        } catch (err) {
+            if (err.balance !== undefined) { money = err.balance; updateMoney(); }
+            statusBox.className = "status lose";
+            statusBox.innerText = err.message;
+            spinning = false;
+            savingLocked = false;
+            updateUIState();
+            return;
+        }
+        // Der Server hat ggf. weniger gewürfelt (Geld alle / Rundenende)
+        spins = batch.results ? batch.results.length : 1;
+    }
+
     for (let i = 0; i < spins; i++) {
 
         if (mpGame.active && mpGame.ended) {
@@ -2364,15 +2403,14 @@ async function startSpin() {
             break;
         }
 
-        if (money < bet) {
+        if (money < bet && !batch) {
             statusBox.className = "status lose";
             statusBox.innerText = "Nicht genug Geld für weitere Spins!";
             break;
         }
 
-        // Online-Konto / Multiplayer: der Server würfelt und bucht ab
-        const remoteKind = spinRemoteKind();
-        let remote = null;
+        // Ergebnis dieses Spins vom Server (ältere Worker: nur ein Spin, oben drin)
+        const remote = batch ? (batch.results ? batch.results[i] : batch) : null;
 
         money -= bet;
         updateMoney();
@@ -2380,19 +2418,6 @@ async function startSpin() {
         statusBox.className = "status";
         statusBox.innerText = "🎰 Dreht...";
         clearHighlights();
-
-        if (remoteKind) {
-            try {
-                remote = await spinRemote(remoteKind, bet);
-            } catch (err) {
-                money += bet;
-                if (err.balance !== undefined) money = err.balance;
-                updateMoney();
-                statusBox.className = "status lose";
-                statusBox.innerText = err.message;
-                break;
-            }
-        }
 
         let win = 0;
         let steps = [];
@@ -2487,6 +2512,10 @@ async function startSpin() {
         await new Promise(r => setTimeout(r, 500));
     }
 
+    // Abgebrochen (z.B. Rundenende)? Gebucht hat der Server trotzdem alles -
+    // also den Endstand übernehmen, damit nichts auseinanderläuft.
+    if (batch) { money = batch.balance; updateMoney(); }
+
     spinning = false;
     savingLocked = false; // 🔓 Save wieder frei
     updateUIState();
@@ -2543,6 +2572,11 @@ document.getElementById("btnRefresh").addEventListener("click", async () => {
                 body: JSON.stringify({ token: account.lbToken, mode: gameMode })
             });
             const data = await resp.json();
+            if (data.error === "pending") {
+                statusBox.className = "status";
+                statusBox.innerText = spinPendingText(data.waitMs);
+                return;
+            }
             if (!data.ok) throw new Error(data.error);
             money = data.balance;
             updateMoney();
