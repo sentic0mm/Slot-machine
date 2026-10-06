@@ -21,6 +21,7 @@
 //                   Support Beweise in Anfragen prüfen kann)
 //   counters/users, handles/<name>  werden nur noch hier geschrieben
 //   ipGuard/<hash>  Registrierungs-Limit pro IP
+//   banned/<uid>    vom Betreiber gebannt (Admin-Panel): kein Login, kein Spin
 
 const PBKDF2_ITERATIONS = 10000; // Cloudflare Free-Plan hat ~10 ms CPU pro
                                   // Anfrage; höher geht, falls Fehler 1102
@@ -195,6 +196,7 @@ export function makeAuthHandlers(deps) {
 
     const user = await fbGet(env, "users/" + enc(uid) + ".json");
     if (!user) return jsonResponse({ ok: false, error: "invalid_login" }, 401);
+    if (await fbGet(env, "banned/" + enc(uid) + ".json")) return jsonResponse({ ok: false, error: "banned" }, 403);
     const creds = await fbGet(env, "creds/" + enc(uid) + ".json") || {};
 
     const wait = lockedFor(creds);
@@ -244,6 +246,7 @@ export function makeAuthHandlers(deps) {
     if (!uid) return jsonResponse({ ok: false, error: "unknown_handle" }, 404);
     const user = await fbGet(env, "users/" + enc(uid) + ".json");
     if (!user) return jsonResponse({ ok: false, error: "invalid_code" }, 401);
+    if (await fbGet(env, "banned/" + enc(uid) + ".json")) return jsonResponse({ ok: false, error: "banned" }, 403);
     const creds = await fbGet(env, "creds/" + enc(uid) + ".json") || {};
 
     const wait = lockedFor(creds);

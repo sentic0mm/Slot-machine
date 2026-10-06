@@ -70,9 +70,13 @@ export function makeSpinHandlers(deps) {
   const { fbGet, fbGetEtag, fbPut, fbPatch, jsonResponse, readJson, verifyToken } = deps;
   const enc = (s) => encodeURIComponent(s);
 
+  // Gebannte Accounts (banned/<uid>, setzt das Admin-Panel) dürfen nicht
+  // mehr spinnen - ihr altes Token zählt dann als ungültig.
   async function auth(body, env) {
     const p = await verifyToken(body.token, env.WORKER_SECRET);
-    return p ? p.uid : null;
+    if (!p) return null;
+    if (await fbGet(env, "banned/" + enc(p.uid) + ".json")) return null;
+    return p.uid;
   }
   function parseCount(v, max) {
     const n = Math.floor(Number(v));
