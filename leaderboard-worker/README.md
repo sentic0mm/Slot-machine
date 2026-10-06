@@ -70,10 +70,9 @@ aus. Damit wissen die DB-Regeln (`../database.rules.json`), wer schreibt.
 2. **Authentication aktivieren:** Firebase-Konsole → Authentication →
    „Jetzt starten“. Für die Spieler muss kein Anbieter eingeschaltet werden
    (Custom Tokens gehen immer).
-   **Achtung Admin-Zugang:** Die Regeln verlangen jetzt eine *bestätigte*
-   E-Mail (`email_verified`). Mit Google-Login ist das automatisch so. Falls
-   dein Admin-Panel E-Mail/Passwort nutzt: vorher die Mail bestätigen,
-   sonst sperrst du dich aus.
+   **Admin-Zugang:** Die Regeln erlauben Vollzugriff nur noch deiner
+   Admin-UID (Authentication → Nutzer → Nutzer-UID), nicht mehr jedem Konto
+   mit deiner Mail-Adresse.
 3. **Worker deployen:** `npx wrangler deploy` (alte Seite läuft damit weiter).
 4. **Seite deployen:** PR mergen (GitHub Pages).
 5. **Regeln einspielen:** Inhalt von `database.rules.json` in der Konsole
