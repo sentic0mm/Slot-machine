@@ -1457,6 +1457,7 @@ body.mp-active .save-buttons {
     </div>
 
     <button id="btnAccSubmit" class="menu-btn primary">🔑 Einloggen</button>
+    <button id="btnForgotPw" class="menu-btn small">🔐 Passwort vergessen?</button>
     <button id="btnGuest" class="menu-btn">🎭 Als Gast spielen (nur Solo)</button>
 
     <div id="loginStatus" class="menu-status"></div>
@@ -1738,6 +1739,7 @@ body.mp-active .save-buttons {
 
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
 
 <script>
 // -------von hier-------
@@ -2624,11 +2626,13 @@ const firebaseConfig = {
 };
 
 let fdb = null;
+let fauth = null; // Firebase Auth - echter Login, damit die DB-Regeln wissen, wer schreibt
 let mpServerOffset = 0; // Differenz lokale Uhr <-> Firebase-Server
 
 try {
     firebase.initializeApp(firebaseConfig);
     fdb = firebase.database();
+    fauth = firebase.auth();
 
     // Serverzeit-Abgleich, damit der Countdown bei allen synchron läuft
     fdb.ref(".info/serverTimeOffset").on("value", s => {
@@ -2636,6 +2640,27 @@ try {
     });
 } catch (e) {
     console.warn("Firebase nicht verfügbar:", e);
+}
+
+// Wird erfüllt, sobald Firebase Auth weiß, ob noch eine Sitzung besteht
+// (die bleibt über Reloads hinweg erhalten, wie localStorage).
+const fbAuthReady = new Promise(resolve => {
+    if (!fauth) { resolve(null); return; }
+    const off = fauth.onAuthStateChanged(u => { off(); resolve(u); });
+});
+
+// Nach Login/Registrierung/Reset: mit dem Custom-Token vom Worker bei
+// Firebase anmelden. Erst danach dürfen wir in der DB als dieser Account
+// schreiben.
+async function fbSignIn(firebaseToken) {
+    if (!fauth || !firebaseToken) throw new Error("Login-Server nicht erreichbar.");
+    await fauth.signInWithCustomToken(firebaseToken);
+}
+function fbSignOutSoon(pending) {
+    if (!fauth) return;
+    // Offene Schreibvorgänge (z.B. "offline"-Status) noch mit dem alten
+    // Login rausschicken lassen, dann abmelden.
+    Promise.resolve(pending).catch(() => {}).finally(() => fauth.signOut().catch(() => {}));
 }
 
 function mpNow() {
@@ -2742,63 +2767,21 @@ function accSetMode(mode) {
 document.getElementById("tabLogin").addEventListener("click", () => accSetMode("login"));
 document.getElementById("tabRegister").addEventListener("click", () => accSetMode("register"));
 
-function accPassHash(uid, pass) {
-    return sha256("slotm:" + uid + ":" + pass);
-}
 
-// ---------- Passwort-Verschlüsselung (nur der Betreiber kann lesen) ----------
-// Öffentlicher RSA-Schlüssel: kann NUR verschlüsseln. Entschlüsseln geht
-// ausschließlich mit dem privaten Schlüssel im lokalen Admin-Panel.
-const PW_PUBLIC_JWK = {"key_ops":["encrypt"],"ext":true,"kty":"RSA","n":"24MgjsoIJ9dJtoZHildc24oNV0tAVY_KUccQeNBvpMF0L4GDPuowjhoSKplNXrpwLCaiImMzsOFPSAYvI3BVdp-rKwWnwwg5ctTPL7eJYVyHlH3Dkq1DqIegkQiHZd-lDLHe8qdpOGXJ4arZ1HcKUX1MR02HC1lTZB11O8ZLUvaW9_M-T3-Mi_z87MIkxT2QqndEmdly3Xl4U0LKxGB3e7GeWuyvIH9k8-qgVl7-NRYsdFgC8aGBesNuENK26xU16_UMCRF_umle50p31rXZ7igK4KipOOR9Lo_5sZx1lHHv2TyY7ad7OGAeAJ1mYgDZy9Hu6EhuVZ34BELlzmy4aQ","e":"AQAB","alg":"RSA-OAEP-256"};
-
-let _pwPubKey = null;
-async function accEncryptPassword(pass) {
-    if (!_pwPubKey) {
-        _pwPubKey = await crypto.subtle.importKey(
-            "jwk", PW_PUBLIC_JWK, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]
-        );
-    }
-    const ct = await crypto.subtle.encrypt(
-        { name: "RSA-OAEP" }, _pwPubKey, new TextEncoder().encode(pass)
-    );
-    // als Base64 speichern
-    return btoa(String.fromCharCode.apply(null, new Uint8Array(ct)));
-}
-
-// Speichert die verschlüsselte Kopie UND ein öffentliches Flag hasPwEnc,
-// damit das Spiel weiß, welche Accounts schon migriert sind.
-async function accStorePwEnc(uid, pass) {
-    try {
-        await fdb.ref("pwenc/" + uid).set(await accEncryptPassword(pass));
-        await fdb.ref("users/" + uid + "/hasPwEnc").set(true);
-    } catch (e) {}
-}
+// Passwort-Verschlüsselung (pwenc) wurde entfernt: Klartext-Passwörter, die
+// irgendwer entschlüsseln kann, sind ein Risiko (viele benutzen dasselbe
+// Passwort auch woanders). Passwort vergessen -> Wiederherstellungs-Code.
 
 // ---------- Wiederherstellungs-Code ----------
-// Wird einmalig erzeugt, dem Spieler EINMAL angezeigt und im Klartext
-// unter /recovery/<uid> gespeichert. Dieser Bereich ist per DB-Regel
-// für NIEMANDEN lesbar – nur der Betreiber sieht die Codes (Console/
-// Admin-Panel). Schreiben geht genau einmal, ändern/löschen kann ihn
-// vom Spiel aus niemand.
+// Erzeugt der Worker (sicherer Zufall, nur er und der Betreiber sehen ihn).
+// Damit kann man sein Passwort selbst zurücksetzen ("Passwort vergessen?").
 
-function accNewRecoveryCode() {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let c = "";
-    for (let i = 0; i < 12; i++) c += chars[Math.floor(Math.random() * chars.length)];
-    return c.slice(0, 4) + "-" + c.slice(4, 8) + "-" + c.slice(8, 12);
-}
-
-// Legt den Code an und merkt am Account, dass er existiert
-async function accCreateRecovery(uid) {
-    const code = accNewRecoveryCode();
-    await fdb.ref("recovery/" + uid).set(code);
-    await fdb.ref("users/" + uid + "/hasRecovery").set(true);
-    if (account && account.uid === uid) {
-        account.hasRecovery = true;
-        localStorage.setItem("account", JSON.stringify(account));
-        accUpdateMenu();
-    }
-    return code;
+async function accCreateRecovery() {
+    const r = await accWorker("/recovery", { token: account.lbToken });
+    account.hasRecovery = true;
+    localStorage.setItem("account", JSON.stringify(account));
+    accUpdateMenu();
+    return r.recoveryCode;
 }
 
 function accShowRecoveryCode(code) {
@@ -2821,9 +2804,10 @@ document.getElementById("btnRecoveryDone").addEventListener("click", () => {
 
 // Für Accounts, die noch keinen Code haben
 document.getElementById("btnMakeRecovery").addEventListener("click", async () => {
-    if (!account || !fdb || account.hasRecovery) return;
+    if (!account || account.hasRecovery) return;
+    if (!lbTokenValid()) { forceRelogin(); return; }
     try {
-        const code = await accCreateRecovery(account.uid);
+        const code = await accCreateRecovery();
         accShowRecoveryCode(code);
     } catch (err) {
         setMenuStatus(mpFriendlyError(err));
@@ -2835,7 +2819,7 @@ async function accRegister(handle, pass, pass2) {
         accStatus("❌ Name: 3–16 Zeichen, nur Buchstaben, Zahlen und _");
         return;
     }
-    if (pass.length < 4) { accStatus("❌ Passwort: mindestens 4 Zeichen!"); return; }
+    if (pass.length < 8) { accStatus("❌ Passwort: mindestens 8 Zeichen!"); return; }
     if (pass !== pass2) { accStatus("❌ Die Passwörter stimmen nicht überein!"); return; }
 
     // Optionaler Anzeigename direkt bei der Registrierung
@@ -2848,88 +2832,95 @@ async function accRegister(handle, pass, pass2) {
 
     accStatus("✨ Account wird erstellt…");
 
-    // 1) Fortlaufende User-ID ziehen
-    const counter = await fdb.ref("counters/users").transaction(cur => (cur || 0) + 1);
-    if (!counter.committed) { accStatus("❌ Fehler bei der ID-Vergabe."); return; }
-    const uid = "u" + counter.snapshot.val();
+    const r = await accWorker("/register", { handle, pass, nick: nick || "" });
+    await fbSignIn(r.firebaseToken);
+    accLoggedIn(r.uid, r.handle, r.nick, true, r.joinPref, r);
+    // Wiederherstellungs-Code EINMALIG anzeigen
+    if (r.recoveryCode) accShowRecoveryCode(r.recoveryCode);
+}
 
-    // 2) Namen reservieren (einmalig!)
-    const lower = handle.toLowerCase();
-    const claim = await fdb.ref("handles/" + lower).transaction(cur => {
-        if (cur !== null) return; // schon vergeben -> abbrechen
-        return uid;
-    });
-    if (!claim.committed || claim.snapshot.val() !== uid) {
-        accStatus("❌ @" + handle + " ist schon vergeben!");
-        return;
+// Fehlercodes des Workers -> Text für den Spieler
+const ACC_ERRORS = {
+    bad_handle: "❌ Name: 3–16 Zeichen, nur Buchstaben, Zahlen und _",
+    bad_password: "❌ Passwort: mindestens 8 Zeichen!",
+    bad_nick: "❌ Anzeigename: 3–16 Zeichen, nur Buchstaben, Zahlen, _ und Leerzeichen",
+    handle_taken: "❌ Der Name ist schon vergeben!",
+    too_many_registrations: "❌ Zu viele neue Accounts von diesem Netz – später nochmal.",
+    invalid_login: "❌ Falsches Passwort!",
+    reset_required: "🔐 Dein Passwort wurde zurückgesetzt – tippe auf „Passwort vergessen?“ und nutze deinen Wiederherstellungs-Code.",
+    invalid_code: "❌ Wiederherstellungs-Code stimmt nicht.",
+    code_not_trusted: "❌ Dein Code stammt von vor dem Sicherheits-Update. Schreib den Support an, der kann ihn freigeben.",
+    already_has_code: "Du hast schon einen Code.",
+    invalid_token: "🔑 Bitte einmal neu einloggen.",
+    busy: "⏳ Gerade viel los – bitte nochmal versuchen."
+};
+
+class AccError extends Error {
+    constructor(code, data) {
+        let msg = ACC_ERRORS[code] || ("❌ Fehler: " + code);
+        if (code === "locked") msg = "🔒 Zu viele Fehlversuche – warte " + Math.ceil((data.retryAfter || 60) / 60) + " Min.";
+        super(msg);
+        this.code = code;
     }
+}
 
-    // 3) Account speichern
-    const passHash = await accPassHash(uid, pass);
-    await fdb.ref("users/" + uid).set({
-        handle: handle,
-        handleLower: lower,
-        nick: nick || null,
-        passHash: passHash,
-        createdAt: mpNow()
-    });
-
-    // Verschlüsselte Passwort-Kopie (nur der Betreiber kann sie lesen)
-    await accStorePwEnc(uid, pass);
-
-    const lbAuth = await lbApiLogin(uid, pass);
-    accLoggedIn(uid, handle, nick || null, false, undefined, lbAuth);
-
-    // 4) Wiederherstellungs-Code anlegen und EINMALIG anzeigen.
-    // Falls das schiefgeht, bleibt der Menü-Button dafür sichtbar.
+async function accWorker(path, body) {
+    let resp;
     try {
-        const recoveryCode = await accCreateRecovery(uid);
-        accShowRecoveryCode(recoveryCode);
-    } catch (e) {}
+        resp = await fetch(LB_WORKER_URL + path, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+    } catch (e) {
+        throw new Error("❌ Login-Server nicht erreichbar. Internet da?");
+    }
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) throw new AccError(data.error || ("http_" + resp.status), data);
+    return data;
 }
 
 async function accLogin(handle, pass) {
     const lower = handle.toLowerCase();
     if (!lower) { accStatus("❌ Name eingeben!"); return; }
-
     accStatus("🔑 Logge ein…");
-
-    const uid = (await fdb.ref("handles/" + lower).get()).val();
-    if (!uid) {
-        // Kein Account -> Hinweis mit klickbarem "jetzt registrieren"
-        elLoginStatus.innerHTML = 'Noch kein Account? <span class="reg-link">jetzt registrieren</span>';
-        const rl = elLoginStatus.querySelector(".reg-link");
-        if (rl) rl.addEventListener("click", () => document.getElementById("tabRegister").click());
-        return;
+    let r;
+    try {
+        r = await accWorker("/login", { handle: lower, pass });
+    } catch (err) {
+        if (err.code === "unknown_handle") {
+            // Kein Account -> Hinweis mit klickbarem "jetzt registrieren"
+            elLoginStatus.innerHTML = 'Noch kein Account? <span class="reg-link">jetzt registrieren</span>';
+            const rl = elLoginStatus.querySelector(".reg-link");
+            if (rl) rl.addEventListener("click", () => document.getElementById("tabRegister").click());
+            return;
+        }
+        throw err;
     }
+    await fbSignIn(r.firebaseToken);
+    accLoggedIn(r.uid, r.handle, r.nick, r.hasRecovery, r.joinPref, r);
+}
 
-    const user = (await fdb.ref("users/" + uid).get()).val();
-    if (!user) { accStatus("❌ Account beschädigt – bitte Support anschreiben."); return; }
-
-    if (!user.passHash) {
-        // Passwort wurde vom Support zurückgesetzt -> das jetzt
-        // eingegebene Passwort wird das neue.
-        if (pass.length < 4) { accStatus("❌ Neues Passwort: mindestens 4 Zeichen!"); return; }
-        const passHash = await accPassHash(uid, pass);
-        await fdb.ref("users/" + uid).update({ passHash: passHash });
-        // Verschlüsselte Kopie auf das neue Passwort aktualisieren
-        await accStorePwEnc(uid, pass);
-        const lbAuthReset = await lbApiLogin(uid, pass);
-        accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery, undefined, lbAuthReset);
-        setMenuStatus("🔓 Passwort war zurückgesetzt – dein eingegebenes ist jetzt das neue!");
-        return;
+// Passwort vergessen -> mit Wiederherstellungs-Code selbst zurücksetzen
+async function accForgotPassword() {
+    const handle = elAccName.value.trim().replace(/^@/, "").toLowerCase()
+        || (prompt("Dein @Name:") || "").trim().replace(/^@/, "").toLowerCase();
+    if (!handle) return;
+    const code = (prompt("Wiederherstellungs-Code von @" + handle + " (XXXX-XXXX-XXXX):") || "").trim();
+    if (!code) return;
+    const newPass = prompt("Neues Passwort (mindestens 8 Zeichen):") || "";
+    if (!newPass) return;
+    if (newPass.length < 8) { accStatus(ACC_ERRORS.bad_password); return; }
+    if (prompt("Neues Passwort nochmal:") !== newPass) { accStatus("❌ Die Passwörter stimmen nicht überein!"); return; }
+    accStatus("🔐 Setze Passwort zurück…");
+    try {
+        const r = await accWorker("/reset", { handle, code, newPass });
+        await fbSignIn(r.firebaseToken);
+        accLoggedIn(r.uid, r.handle, r.nick, r.hasRecovery, r.joinPref, r);
+        setMenuStatus("✅ Neues Passwort gesetzt!");
+    } catch (err) {
+        accStatus(err.code === "unknown_handle" ? "❌ Diesen @Namen gibt es nicht." : (err.message || String(err)));
     }
-
-    const passHash = await accPassHash(uid, pass);
-    if (passHash !== user.passHash) { accStatus("❌ Falsches Passwort!"); return; }
-
-    // Verschlüsselte Passwort-Kopie beim Login nachtragen / aktuell halten.
-    // So bekommen auch Accounts von VOR dem Verschlüsselungs-Update ihre
-    // Kopie automatisch – sobald sie sich das nächste Mal einloggen.
-    await accStorePwEnc(uid, pass);
-
-    const lbAuth = await lbApiLogin(uid, pass);
-    accLoggedIn(uid, user.handle, user.nick, !!user.hasRecovery, user.joinPref, lbAuth);
 }
 
 function accLoggedIn(uid, handle, nick, hasRecovery, joinPref, lbAuth) {
@@ -2966,8 +2957,6 @@ function accLoggedIn(uid, handle, nick, hasRecovery, joinPref, lbAuth) {
     presenceStart();
     friendsInit();
     lbInitAccount();
-    // Frischer Login/Registrierung -> Passwort wird gerade verschlüsselt,
-    // also keine Warnung mehr nötig.
     document.getElementById("pwencWarn").hidden = true;
     sessionStorage.removeItem("pwencSnooze");
     localStorage.removeItem("guestMode");
@@ -2987,9 +2976,11 @@ document.getElementById("btnAccSubmit").addEventListener("click", async () => {
         if (accMode === "register") await accRegister(handle, pass, elAccPass2.value);
         else await accLogin(handle, pass);
     } catch (err) {
-        accStatus(mpFriendlyError(err));
+        accStatus(err instanceof AccError || /^[❌🔒🔐⏳🔑]/u.test(err.message || "") ? err.message : mpFriendlyError(err));
     }
 });
+
+document.getElementById("btnForgotPw").addEventListener("click", () => accForgotPassword());
 
 for (const id of ["accName", "accNick", "accPass", "accPass2"]) {
     document.getElementById(id).addEventListener("keydown", e => {
@@ -3012,7 +3003,7 @@ document.getElementById("btnGoLogin").addEventListener("click", () => {
 document.getElementById("btnLogout").addEventListener("click", () => {
     lbFlushPlaytime();
     clearTimeout(lbState.moneyTimer);
-    presenceStop();
+    fbSignOutSoon(presenceStop());
     friendsTeardown();
     account = null;
     offlineMode = false;
@@ -3039,7 +3030,7 @@ document.getElementById("btnLogout").addEventListener("click", () => {
 function forceRelogin() {
     const h = account ? account.handle : "";
     lbFlushPlaytime();
-    presenceStop();
+    fbSignOutSoon(presenceStop());
     friendsTeardown();
     account = null;
     offlineMode = false;
@@ -3063,6 +3054,7 @@ function forceRelogin() {
 // noch nicht). Sie werden gebeten, sich einmal neu einzuloggen.
 
 function maybeShowPwEncWarning(hasPwEnc) {
+    return; // pwenc gibt es nicht mehr
     const show = !!account && !hasPwEnc
         && !mpGame.active
         && sessionStorage.getItem("pwencSnooze") !== "1";
@@ -3322,17 +3314,28 @@ function presenceStop(removeEntry) {
     const ref = fdb.ref("status/" + account.uid);
     ref.onDisconnect().cancel().catch(() => {});
     if (removeEntry) {
-        ref.remove().catch(() => {});
-    } else {
-        ref.update({
-            online: false,
-            lastSeen: firebase.database.ServerValue.TIMESTAMP
-        }).catch(() => {});
+        return ref.remove().catch(() => {});
     }
+    return ref.update({
+        online: false,
+        lastSeen: firebase.database.ServerValue.TIMESTAMP
+    }).catch(() => {});
 }
 
 // Beim Start prüfen, ob der Account noch existiert (der Support
 // könnte ihn inzwischen umbenannt oder gelöscht haben)
+// Sicherheits-Update: Wer noch von vorher eingeloggt ist (ohne echten
+// Firebase-Login), muss sich einmal neu einloggen - sonst würden alle
+// Schreibvorgänge an den neuen DB-Regeln scheitern.
+if (account && fdb) {
+    fbAuthReady.then(u => {
+        if (account && (!u || u.uid !== account.uid)) {
+            forceRelogin();
+            accStatus("🔒 Sicherheits-Update: bitte einmal neu einloggen.");
+        }
+    });
+}
+
 if (account && fdb) {
     presenceStart();
     fdb.ref("users/" + account.uid).get().then(snap => {
@@ -3396,26 +3399,6 @@ const LB_AFK_LIMIT = 2 * 60000;  // ab 2 min ohne Eingabe zählt die Zeit nicht 
 // wäre "Konsole öffnen und money=999999 setzen" nicht zu verhindern gewesen.
 // URL nach "wrangler deploy" hier eintragen (siehe leaderboard-worker/README.md).
 const LB_WORKER_URL = "https://slotmachine-leaderboard.sentic0mm.workers.dev";
-
-// Holt beim Login/Registrieren EINMAL ein signiertes Session-Token vom
-// Worker (das Passwort selbst wird nirgends gespeichert). Schlägt der
-// Worker fehl (noch nicht deployed, offline, ...), bleibt lbToken einfach
-// leer - man kann weiterspielen, nur die Rangliste bekommt dann nichts.
-async function lbApiLogin(uid, pass) {
-    try {
-        const resp = await fetch(LB_WORKER_URL + "/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ uid, pass })
-        });
-        const data = await resp.json();
-        if (!resp.ok || !data.ok) return null;
-        return { token: data.token, exp: data.exp, wallet: data.wallet || {} };
-    } catch (e) {
-        console.warn("Rangliste: Login beim Worker fehlgeschlagen", e);
-        return null;
-    }
-}
 
 // Schickt geprüfte Rangliste-Werte an den Worker statt direkt an Firebase.
 // Schickt an den Worker und wiederholt bei "busy" (429) kurz - der Worker
@@ -4375,6 +4358,7 @@ function mpTryCreate(statusFn, attempt) {
         createdAt: mpNow(),
         lastActivity: mpNow(),         // für Auto-Schließen bei Inaktivität
         hostUid: account.uid,          // für den host-bezogenen Bann
+        hostPid: mpMyId,               // DB-Regeln: wer der Host-Spieler ist
         settings: {
             duration: mpSettings.duration,
             startMoney: mpSettings.startMoney,
@@ -4449,40 +4433,31 @@ function mpJoin(code, statusFn) {
 }
 
 function mpDoJoin(ref, code, statusFn) {
-    ref.transaction(cur => {
-        // Erster Versuch läuft oft mit leerem Cache (cur === null).
-        // null zurückgeben = "nichts ändern": existiert die Lobby doch,
-        // wiederholt Firebase die Transaktion mit den echten Daten.
-        if (cur === null) return null;
-
-        if (cur.status !== "waiting") return; // Runde läuft -> abbrechen
-        const players = cur.players || {};
-        if (Object.keys(players).length >= MP_MAX_PLAYERS) return; // voll
-        players[mpMyId] = { name: mpMyName, uid: account.uid, money: 0, host: false, online: true, joinedAt: mpNow() };
-        cur.players = players;
-        return cur;
-    }, (err, committed, snap) => {
-        if (err) {
+    // Nur den EIGENEN Spieler-Eintrag schreiben (nicht mehr die ganze Lobby
+    // per Transaktion) - so können die DB-Regeln sicherstellen, dass niemand
+    // fremde Einträge (Geld, Host-Status, ...) anfasst.
+    ref.get().then(snap => {
+        const data = snap.val();
+        if (!data) { mpBusy = false; statusFn("❌ Lobby nicht gefunden! Code prüfen?"); return; }
+        if (data.status !== "waiting") { mpBusy = false; statusFn("❌ Die Runde läuft schon!"); return; }
+        if (Object.keys(data.players || {}).length >= MP_MAX_PLAYERS) {
             mpBusy = false;
-            statusFn(mpFriendlyError(err));
+            statusFn("❌ Lobby ist voll (" + MP_MAX_PLAYERS + "/" + MP_MAX_PLAYERS + ")!");
             return;
         }
-
-        const data = snap ? snap.val() : null;
-
-        if (committed && data && data.players && data.players[mpMyId]) {
+        return ref.child("players/" + mpMyId).set({
+            name: mpMyName, uid: account.uid, money: 0, host: false, online: true, joinedAt: mpNow()
+        }).then(() => {
             statusFn("");
             setMenuStatus("");
             mpEnterLobby(code, "client");
             mpBumpActivity(); // neuer Beitritt = Aktivität
-            return;
-        }
-
-        // Nicht reingekommen -> Grund rausfinden
+        });
+    }).catch(err => {
         mpBusy = false;
-        if (!data) statusFn("❌ Lobby nicht gefunden! Code prüfen?");
-        else if (data.status !== "waiting") statusFn("❌ Die Runde läuft schon!");
-        else statusFn("❌ Lobby ist voll (" + MP_MAX_PLAYERS + "/" + MP_MAX_PLAYERS + ")!");
+        statusFn(/permission/i.test(String(err && err.message))
+            ? "🚫 Beitritt nicht möglich (gebannt oder Lobby geschlossen)."
+            : mpFriendlyError(err));
     });
 }
 
@@ -4569,8 +4544,9 @@ function mpAddChatMessage(msg) {
 }
 
 function mpAmIMuted() {
-    const me = mpLobbyData && mpLobbyData.players && mpLobbyData.players[mpMyId];
-    return !!(me && me.muted);
+    // Mute liegt unter lobbies/<code>/muted/<id> - dort darf nur der Host
+    // schreiben, man kann sich also nicht selbst entmuten.
+    return !!(mpLobbyData && mpLobbyData.muted && mpLobbyData.muted[mpMyId]);
 }
 
 function mpSendChat(inputId, hintId) {
@@ -4582,6 +4558,7 @@ function mpSendChat(inputId, hintId) {
     hint.innerText = "";
     mpRef.child("chat").push({
         uid: account ? account.uid : null,
+        pid: mpMyId, // DB-Regeln prüfen damit, ob du gemutet bist
         name: mpMyName,
         text: text,
         time: firebase.database.ServerValue.TIMESTAMP
@@ -4953,7 +4930,7 @@ function mpPlayerList(data) {
             uid: players[id].uid || null,
             money: Number(players[id].money) || 0,
             host: !!players[id].host,
-            muted: !!players[id].muted,
+            muted: !!(data && data.muted && data.muted[id]),
             online: players[id].online !== false,
             joinedAt: players[id].joinedAt || 0
         }))
@@ -5227,7 +5204,7 @@ function mpCanMod() {
 
 function mpModMute(id, mute) {
     if (!mpCanMod() || !mpRef || id === mpMyId) return;
-    mpRef.child("players/" + id + "/muted").set(mute ? true : null).catch(() => {});
+    mpRef.child("muted/" + id).set(mute ? true : null).catch(() => {});
 }
 
 function mpModKick(id, name) {

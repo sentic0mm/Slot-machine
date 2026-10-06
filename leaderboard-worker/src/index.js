@@ -4,9 +4,10 @@
 // das kann nur Code, der ein Geheimnis besitzt. Dieser Worker ist dieser Code.
 //
 // Ablauf:
-//   1) POST /login   { uid, pass } -> prüft das Passwort GENAU EINMAL gegen
-//      die Datenbank (wie der bisherige Login), gibt bei Erfolg ein
-//      signiertes Session-Token zurück (HMAC, Geheimnis kennt nur der Worker).
+//   0) POST /register, /login, /reset, /recovery -> Accounts, siehe auth.js.
+//      Login gibt ein signiertes Session-Token (HMAC, Geheimnis kennt nur der
+//      Worker) für die Routen unten zurück, plus ein Firebase-Custom-Token,
+//      mit dem sich die Seite bei Firebase Auth anmeldet.
 //   2) POST /leaderboard  { token, name, handle, playtimeIncrement?, money? }
 //      -> prüft das Token, prüft die Werte (playtime nur steigend + max.
 //      +120 pro Schreibvorgang, money >= 0 und darf pro Schreibvorgang
@@ -26,11 +27,9 @@
 //      erreichbar, da es (anders als die öffentliche Rangliste) niemand
 //      sonst etwas angeht.
 //
-// Warum nicht einfach den in der DB gespeicherten passHash vergleichen?
-// users/<uid> (inkl. passHash) ist laut DB-Regeln öffentlich lesbar - jeder
-// könnte den Hash direkt auslesen und als "Beweis" vorzeigen. Deshalb prüft
-// dieser Worker das Passwort selbst und stellt ein eigenes, nur ihm bekanntes
-// Token aus.
+// Passwörter liegen nur noch als PBKDF2-Hash unter creds/<uid> (für Clients
+// gesperrt). Der alte, öffentlich lesbare users/<uid>/passHash wird beim
+// ersten Login automatisch umgezogen und gelöscht (siehe auth.js).
 
 const TOKEN_TTL_SEC = 30 * 24 * 60 * 60; // Session-Token 30 Tage gültig - war
                                           // erst 12h, das lief bei längeren
@@ -93,6 +92,8 @@ function checkMoneyWindow(guard, key, cur, v, now) {
   return true;
 }
 
+import { makeAuthHandlers } from "./auth.js";
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -106,7 +107,13 @@ export default {
     try {
       let resp;
       if (request.method === "POST" && url.pathname === "/login") {
-        resp = await handleLogin(request, env);
+        resp = await auth.handleLogin(request, env);
+      } else if (request.method === "POST" && url.pathname === "/register") {
+        resp = await auth.handleRegister(request, env);
+      } else if (request.method === "POST" && url.pathname === "/reset") {
+        resp = await auth.handleReset(request, env);
+      } else if (request.method === "POST" && url.pathname === "/recovery") {
+        resp = await auth.handleRecovery(request, env);
       } else if (request.method === "POST" && url.pathname === "/leaderboard") {
         resp = await handleLeaderboardWrite(request, env);
       } else if (request.method === "POST" && url.pathname === "/wallet") {
@@ -126,45 +133,6 @@ export default {
 };
 
 // ---------- Routen ----------
-
-async function handleLogin(request, env) {
-  const body = await readJson(request);
-  const uid = typeof body.uid === "string" ? body.uid : "";
-  const pass = typeof body.pass === "string" ? body.pass : "";
-  if (!uid || !pass) {
-    console.log("login: Anfrage ohne uid/pass abgelehnt");
-    return jsonResponse({ ok: false, error: "missing_fields" }, 400);
-  }
-
-  const user = await fbGet(env, "users/" + encodeURIComponent(uid) + ".json");
-  if (!user) {
-    console.log("login " + uid + ": Account existiert nicht");
-    return jsonResponse({ ok: false, error: "invalid_login" }, 401);
-  }
-
-  // Passwort NIE mitloggen - nur uid und Ergebnis.
-  const expected = await sha256("slotm:" + uid + ":" + pass);
-  if (expected !== user.passHash) {
-    console.log("login " + uid + ": falsches Passwort");
-    return jsonResponse({ ok: false, error: "invalid_login" }, 401);
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const token = await signToken({ uid, exp: now + TOKEN_TTL_SEC }, env.WORKER_SECRET);
-
-  // Gespeicherten Online-Kontostand gleich mitliefern (ein Roundtrip
-  // gespart) - fehlt er (Account noch nie online gesynct), bleibt wallet
-  // leer, der Client behält dann seinen bisherigen lokalen Stand.
-  let wallet = null;
-  try {
-    wallet = await fbGet(env, "walletSync/" + encodeURIComponent(uid) + ".json");
-  } catch (e) {
-    console.log("login " + uid + ": Kontostand konnte nicht geladen werden - " + String(e && e.message || e));
-  }
-
-  console.log("login " + uid + ": erfolgreich, Token ausgestellt (gueltig bis " + new Date((now + TOKEN_TTL_SEC) * 1000).toISOString() + ")");
-  return jsonResponse({ ok: true, token, exp: now + TOKEN_TTL_SEC, wallet: wallet || {} });
-}
 
 async function handleLeaderboardWrite(request, env) {
   const body = await readJson(request);
@@ -303,7 +271,7 @@ async function getGoogleAccessToken(env) {
   const now = Math.floor(Date.now() / 1000);
   if (cachedGoogleToken && cachedGoogleToken.exp > now + 60) return cachedGoogleToken.token;
 
-  const sa = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_KEY);
+  const sa = getServiceAccount(env);
   const header = { alg: "RS256", typ: "JWT" };
   const claim = {
     iss: sa.client_email,
@@ -380,6 +348,32 @@ async function fbGet(env, path) {
   });
   if (!resp.ok) throw new Error("Firebase GET " + path + " fehlgeschlagen: " + resp.status);
   return resp.json();
+}
+
+function getServiceAccount(env) {
+  return JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_KEY);
+}
+
+// GET mit ETag (für atomare Schreibvorgänge per if-match)
+async function fbGetEtag(env, path) {
+  const token = await getGoogleAccessToken(env);
+  const resp = await fetch(env.FIREBASE_DB_URL + "/" + path, {
+    headers: { Authorization: "Bearer " + token, "X-Firebase-ETag": "true" }
+  });
+  if (!resp.ok) throw new Error("Firebase GET " + path + " fehlgeschlagen: " + resp.status);
+  return { value: await resp.json(), etag: resp.headers.get("ETag") };
+}
+
+// PUT; mit etag nur, wenn sich der Wert seitdem nicht geändert hat
+// ("null_etag" = nur wenn noch nichts da ist). false = Bedingung verfehlt.
+async function fbPut(env, path, data, etag) {
+  const token = await getGoogleAccessToken(env);
+  const headers = { Authorization: "Bearer " + token, "Content-Type": "application/json" };
+  if (etag) headers["if-match"] = etag;
+  const resp = await fetch(env.FIREBASE_DB_URL + "/" + path, { method: "PUT", headers, body: JSON.stringify(data) });
+  if (resp.status === 412) return false;
+  if (!resp.ok) throw new Error("Firebase PUT " + path + " fehlgeschlagen: " + resp.status);
+  return true;
 }
 
 async function fbPatch(env, path, data) {
@@ -476,3 +470,8 @@ function corsResponse(resp, origin, allowed) {
   resp.headers.set("Access-Control-Allow-Headers", "Content-Type");
   return resp;
 }
+
+const auth = makeAuthHandlers({
+  fbGet, fbGetEtag, fbPut, fbPatch, jsonResponse, readJson, signToken, verifyToken,
+  sha256, getServiceAccount, b64url, b64urlFromBuffer, importPrivateKey, TOKEN_TTL_SEC
+});
