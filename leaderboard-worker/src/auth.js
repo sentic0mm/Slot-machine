@@ -34,6 +34,8 @@ const HANDLE_RE = /^[A-Za-z0-9_]{3,16}$/;
 const NICK_RE = /^[A-Za-z0-9_ ]{3,16}$/;
 const RECOVERY_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
+import { effectiveBalances } from "./spin.js";
+
 export function makeAuthHandlers(deps) {
   const { fbGet, fbGetEtag, fbPut, fbPatch, jsonResponse, readJson, signToken, verifyToken,
           sha256, getServiceAccount, b64url, b64urlFromBuffer, importPrivateKey, TOKEN_TTL_SEC } = deps;
@@ -94,8 +96,7 @@ export function makeAuthHandlers(deps) {
     const token = await signToken({ uid, exp }, env.WORKER_SECRET);
     let wallet = null;
     try { wallet = await fbGet(env, "walletSync/" + enc(uid) + ".json"); } catch (e) {}
-    const w = {};
-    if (wallet) for (const m of ["classic", "mega", "ultra"]) if (wallet[m] !== undefined) w[m] = wallet[m];
+    const w = effectiveBalances(wallet || {}, Date.now());
     return jsonResponse(Object.assign({
       ok: true, uid,
       handle: user.handle, nick: user.nick || null,

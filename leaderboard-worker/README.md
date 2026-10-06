@@ -105,6 +105,13 @@ Lobby-Geld schreibt nur noch der Worker; Werte aus der Konsole werden beim
 nächsten Spin einfach durch den echten Stand ersetzt. Gäste und
 Offline-Konten zählen nirgends und würfeln weiter lokal.
 
+**Mehrere Spins auf einmal:** Die Seite schickt `count` mit, der Worker
+würfelt die ganze Serie in einer Anfrage (max. 100). Die Gewinne werden aber
+erst nach und nach freigegeben, ein Spin alle 1,5 s. Wer mittendrin neu
+lädt, hat nur das Geld der schon „gelaufenen“ Spins, und neue Spins gibt es
+erst, wenn die Serie durch ist. Im Multiplayer werden nur so viele Spins
+angenommen, wie bis Rundenende noch Zeit ist.
+
 **Wichtig:** `src/game.js` und die Spiellogik in `index.html` müssen gleich
 bleiben. Wer Gewinne oder Wahrscheinlichkeiten ändert, ändert beides.
 
