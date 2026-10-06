@@ -54,15 +54,43 @@ const HANDLE_MAX = 20;
 const MONEY_GROWTH_FACTOR = 1000;
 const MONEY_MIN_JUMP = 10000;
 const WALLET_MODES = ["classic", "mega", "ultra"];
+// Zeitfenster für die Zuwachs-Grenze: innerhalb von MONEY_WINDOW_SEC darf der
+// Wert höchstens auf das MONEY_GROWTH_FACTOR-fache des Werts zu Fensterbeginn
+// steigen. Vorher galt die Grenze PRO ANFRAGE - mit vier Anfragen in einer
+// Schleife kam man so von 10$ auf 10^13$.
+const MONEY_WINDOW_SEC = 60;
+// Allererster Eintrag eines Accounts (noch kein Vorwert in der DB): vorher
+// komplett unbegrenzt, jetzt höchstens das hier.
+const FIRST_MONEY_MAX = 10000;
+// Etwas Luft für Uhren-/Netzwerk-Schwankungen bei der Spielzeit.
+const PLAYTIME_SLACK_SEC = 5;
 
 // Prüft, ob ein Zuwachs von cur -> v plausibel ist (siehe MONEY_GROWTH_FACTOR
 // oben). Verluste (v <= cur) sind hier immer erlaubt, nur Zuwächse werden
 // begrenzt - genutzt sowohl für den Rangliste-Rekord als auch für den
 // echten Kontostand-Sync.
-function isMoneyJumpOk(cur, v) {
-  if (v <= cur) return true;
-  const maxAllowed = Math.max(cur * MONEY_GROWTH_FACTOR, cur + MONEY_MIN_JUMP);
+function isMoneyJumpOk(base, v) {
+  const maxAllowed = Math.max(base * MONEY_GROWTH_FACTOR, base + MONEY_MIN_JUMP);
   return v <= maxAllowed;
+}
+
+// Prüft einen neuen Geldwert gegen das Zeitfenster in guard[key] und
+// aktualisiert das Fenster. cur = aktueller Wert in der DB (null = noch keiner).
+// Gibt true zurück, wenn der Wert erlaubt ist.
+function checkMoneyWindow(guard, key, cur, v, now) {
+  if (cur === null) {
+    if (v > FIRST_MONEY_MAX) return false;
+    guard[key] = { start: now, base: v };
+    return true;
+  }
+  if (v <= cur) return true; // Verluste immer ok, Fenster bleibt
+  let win = guard[key];
+  if (!win || typeof win.start !== "number" || now - win.start >= MONEY_WINDOW_SEC) {
+    win = { start: now, base: cur };
+  }
+  if (!isMoneyJumpOk(win.base, v)) return false;
+  guard[key] = win;
+  return true;
 }
 
 export default {
@@ -90,7 +118,7 @@ export default {
     } catch (err) {
       console.error("Unerwarteter Fehler: " + String(err && err.message || err));
       return corsResponse(
-        jsonResponse({ ok: false, error: "server_error", detail: String(err && err.message || err) }, 500),
+        jsonResponse({ ok: false, error: "server_error" }, 500),
         origin, allowed
       );
     }
@@ -146,6 +174,8 @@ async function handleLeaderboardWrite(request, env) {
     return jsonResponse({ ok: false, error: "invalid_token" }, 401);
   }
   const uid = payload.uid;
+  const now = Math.floor(Date.now() / 1000);
+  const { guard, etag: guardEtag } = await loadGuard(env, uid);
 
   const update = {};
 
@@ -172,9 +202,17 @@ async function handleLeaderboardWrite(request, env) {
       console.log("leaderboard " + uid + ": playtimeIncrement abgelehnt (Wert: " + body.playtimeIncrement + ", erlaubt 0-" + LB_PLAYTIME_MAX_DELTA + ")");
       return jsonResponse({ ok: false, error: "bad_playtime_delta" }, 400);
     }
+    // Tempolimit: nie mehr Spielzeit gutschreiben als seit dem letzten
+    // Schreibvorgang wirklich vergangen ist (vorher: beliebig viele
+    // Anfragen à 120s hintereinander = unbegrenzte Spielzeit).
+    const allowed = typeof guard.pt === "number"
+      ? Math.max(0, Math.min(LB_PLAYTIME_MAX_DELTA, now - guard.pt + PLAYTIME_SLACK_SEC))
+      : LB_PLAYTIME_MAX_DELTA;
+    const credited = Math.min(inc, allowed);
+    guard.pt = now;
     const current = await fbGet(env, "leaderboard/" + encodeURIComponent(uid) + "/playtime.json");
-    update.playtime = (Number(current) || 0) + inc;
-    console.log("leaderboard " + uid + ": playtime " + (Number(current) || 0) + " + " + inc + " = " + update.playtime);
+    update.playtime = (Number(current) || 0) + credited;
+    console.log("leaderboard " + uid + ": playtime " + (Number(current) || 0) + " + " + credited + " (angefragt " + inc + ") = " + update.playtime);
   }
 
   if (body.money !== undefined) {
@@ -183,16 +221,12 @@ async function handleLeaderboardWrite(request, env) {
       console.log("leaderboard " + uid + ": money abgelehnt (Wert: " + body.money + ", muss >= 0 sein)");
       return jsonResponse({ ok: false, error: "bad_money" }, 400);
     }
-    // Zuwachsrate begrenzen (wie playtime) - aber nur, wenn schon ein
-    // Vorwert existiert. Beim allerersten Sync eines Accounts (z.B. Bestand
-    // von vor diesem Feature) gibt es nichts zum Vergleichen -> unbegrenzt.
+    // Zuwachsrate pro Zeitfenster begrenzen, siehe checkMoneyWindow.
     const currentRaw = await fbGet(env, "leaderboard/" + encodeURIComponent(uid) + "/money.json");
-    if (currentRaw !== null) {
-      const cur = Number(currentRaw) || 0;
-      if (!isMoneyJumpOk(cur, v)) {
-        console.log("leaderboard " + uid + ": money-Sprung abgelehnt (" + cur + " -> " + v + ")");
-        return jsonResponse({ ok: false, error: "bad_money_jump" }, 400);
-      }
+    const cur = currentRaw === null ? null : (Number(currentRaw) || 0);
+    if (!checkMoneyWindow(guard, "lb", cur, v, now)) {
+      console.log("leaderboard " + uid + ": money-Sprung abgelehnt (" + cur + " -> " + v + ")");
+      return jsonResponse({ ok: false, error: "bad_money_jump" }, 400);
     }
     update.money = v;
     console.log("leaderboard " + uid + ": money = " + v);
@@ -205,6 +239,12 @@ async function handleLeaderboardWrite(request, env) {
 
   update.updatedAt = { ".sv": "timestamp" };
 
+  // Guard zuerst atomar speichern - parallele Anfragen (um das Limit mit
+  // vielen gleichzeitigen Requests zu umgehen) scheitern hier am ETag.
+  if (!await saveGuard(env, uid, guard, guardEtag)) {
+    console.log("leaderboard " + uid + ": parallele Anfrage abgelehnt");
+    return jsonResponse({ ok: false, error: "busy" }, 429);
+  }
   await fbPatch(env, "leaderboard/" + encodeURIComponent(uid) + ".json", update);
   console.log("leaderboard " + uid + ": erfolgreich geschrieben (" + Object.keys(update).filter(k => k !== "updatedAt").join(", ") + ")");
   return jsonResponse({ ok: true });
@@ -234,13 +274,17 @@ async function handleWalletSync(request, env) {
     return jsonResponse({ ok: false, error: "bad_amount" }, 400);
   }
 
+  const now = Math.floor(Date.now() / 1000);
+  const { guard, etag: guardEtag } = await loadGuard(env, uid);
   const currentRaw = await fbGet(env, "walletSync/" + encodeURIComponent(uid) + "/" + mode + ".json");
-  if (currentRaw !== null) {
-    const cur = Number(currentRaw) || 0;
-    if (!isMoneyJumpOk(cur, v)) {
-      console.log("wallet " + uid + "/" + mode + ": Sprung abgelehnt (" + cur + " -> " + v + ")");
-      return jsonResponse({ ok: false, error: "bad_wallet_jump" }, 400);
-    }
+  const cur = currentRaw === null ? null : (Number(currentRaw) || 0);
+  if (!checkMoneyWindow(guard, "w_" + mode, cur, v, now)) {
+    console.log("wallet " + uid + "/" + mode + ": Sprung abgelehnt (" + cur + " -> " + v + ")");
+    return jsonResponse({ ok: false, error: "bad_wallet_jump" }, 400);
+  }
+  if (!await saveGuard(env, uid, guard, guardEtag)) {
+    console.log("wallet " + uid + "/" + mode + ": parallele Anfrage abgelehnt");
+    return jsonResponse({ ok: false, error: "busy" }, 429);
   }
 
   const update = {};
@@ -299,6 +343,34 @@ async function importPrivateKey(pem) {
   return crypto.subtle.importKey(
     "pkcs8", raw.buffer, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]
   );
+}
+
+// ---------- Guard (Limit-Zustand pro Account) ----------
+// Liegt unter lbGuard/<uid> - muss in den DB-Regeln für Clients komplett
+// gesperrt sein (Lesen + Schreiben), nur der Worker (Admin) greift darauf zu.
+// Gespeichert wird per ETag-Bedingung (if-match), damit zwei gleichzeitige
+// Anfragen nicht beide denselben alten Stand sehen und das Limit umgehen.
+
+async function loadGuard(env, uid) {
+  const token = await getGoogleAccessToken(env);
+  const resp = await fetch(env.FIREBASE_DB_URL + "/lbGuard/" + encodeURIComponent(uid) + ".json", {
+    headers: { Authorization: "Bearer " + token, "X-Firebase-ETag": "true" }
+  });
+  if (!resp.ok) throw new Error("Firebase GET lbGuard fehlgeschlagen: " + resp.status);
+  const data = await resp.json();
+  return { guard: (data && typeof data === "object") ? data : {}, etag: resp.headers.get("ETag") };
+}
+
+async function saveGuard(env, uid, guard, etag) {
+  const token = await getGoogleAccessToken(env);
+  const resp = await fetch(env.FIREBASE_DB_URL + "/lbGuard/" + encodeURIComponent(uid) + ".json", {
+    method: "PUT",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", "if-match": etag || "" },
+    body: JSON.stringify(guard)
+  });
+  if (resp.status === 412) return false;
+  if (!resp.ok) throw new Error("Firebase PUT lbGuard fehlgeschlagen: " + resp.status);
+  return true;
 }
 
 async function fbGet(env, path) {

@@ -3418,20 +3418,38 @@ async function lbApiLogin(uid, pass) {
 }
 
 // Schickt geprüfte Rangliste-Werte an den Worker statt direkt an Firebase.
+// Schickt an den Worker und wiederholt bei "busy" (429) kurz - der Worker
+// lässt pro Account nur eine Schreib-Anfrage gleichzeitig durch, und
+// Rangliste + Kontostand gehen oft im selben Moment raus.
+// Ergebnis: true (ok), "jump" (Zuwachs-Grenze, später nochmal), false (sonst).
+async function lbWorkerPost(path, body, label) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const resp = await fetch(LB_WORKER_URL + path, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok && data.ok) return true;
+        if (resp.status === 429) {
+            await new Promise(r => setTimeout(r, 250 + Math.random() * 750));
+            continue;
+        }
+        console.warn(label + ": Worker hat abgelehnt", data);
+        return (data.error === "bad_money_jump" || data.error === "bad_wallet_jump") ? "jump" : false;
+    }
+    return false;
+}
+
+// Zuwachs-Grenze des Workers gilt pro Minute - abgelehnte Stände nach
+// Ablauf des Fensters einmal neu schicken (dann mit dem aktuellen Wert).
+const LB_JUMP_RETRY_MS = 61000;
+
 async function lbApiWrite(fields) {
     if (!lbTokenValid()) { maybeShowLbTokenWarning(); return false; }
     try {
-        const resp = await fetch(LB_WORKER_URL + "/leaderboard", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(Object.assign({ token: account.lbToken }, fields))
-        });
-        const data = await resp.json();
-        if (!resp.ok || !data.ok) {
-            console.warn("Rangliste: Worker hat abgelehnt", data);
-            return false;
-        }
-        return true;
+        return await lbWorkerPost("/leaderboard",
+            Object.assign({ token: account.lbToken }, fields), "Rangliste");
     } catch (e) {
         console.warn("Rangliste: Worker nicht erreichbar", e);
         return false;
@@ -3444,17 +3462,8 @@ async function lbApiWrite(fields) {
 async function lbApiWalletSync(mode, amount) {
     if (!lbTokenValid()) { maybeShowLbTokenWarning(); return false; }
     try {
-        const resp = await fetch(LB_WORKER_URL + "/wallet", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: account.lbToken, mode, amount })
-        });
-        const data = await resp.json();
-        if (!resp.ok || !data.ok) {
-            console.warn("Kontostand-Sync: Worker hat abgelehnt", data);
-            return false;
-        }
-        return true;
+        return await lbWorkerPost("/wallet",
+            { token: account.lbToken, mode, amount }, "Kontostand-Sync");
     } catch (e) {
         console.warn("Kontostand-Sync: Worker nicht erreichbar", e);
         return false;
@@ -3593,7 +3602,12 @@ function lbPushMoney() {
     if (!account) return;
     const data = lbBaseData();
     data.money = lbState.bestMoney;
-    lbApiWrite(data);
+    lbApiWrite(data).then(r => {
+        if (r === "jump") {
+            clearTimeout(lbState.moneyTimer);
+            lbState.moneyTimer = setTimeout(lbPushMoney, LB_JUMP_RETRY_MS);
+        }
+    });
 }
 
 // ----- Echter Online-Kontostand (Cross-Device-Sync) -----
@@ -3612,7 +3626,11 @@ function lbNoteWalletSync() {
 function lbPushWalletSync() {
     lbState.walletSyncTimer = null;
     if (!account || offlineMode) return;
-    lbApiWalletSync(gameMode, money);
+    lbApiWalletSync(gameMode, money).then(r => {
+        if (r === "jump" && !lbState.walletSyncTimer) {
+            lbState.walletSyncTimer = setTimeout(lbPushWalletSync, LB_JUMP_RETRY_MS);
+        }
+    });
 }
 
 // Nach Login / beim Start: lokalen Rekord mit der Datenbank abgleichen.
