@@ -57,3 +57,42 @@ npx wrangler dev
 ```
 Startet den Worker lokal (z.B. auf http://localhost:8787). Für lokale Tests
 `LB_WORKER_URL` in index.html vorübergehend auf diese Adresse zeigen lassen.
+
+## Sicherheits-Update (echter Login über Firebase Auth)
+
+Der Worker macht jetzt auch Registrierung, Login, Passwort-Reset und
+Wiederherstellungs-Codes (`src/auth.js`) und gibt ein Firebase-Custom-Token
+aus. Damit wissen die DB-Regeln (`../database.rules.json`), wer schreibt.
+
+**Reihenfolge beim Umstellen (wichtig!):**
+
+1. **Backup:** Firebase-Konsole → Realtime Database → ⋮ → „JSON exportieren“.
+2. **Authentication aktivieren:** Firebase-Konsole → Authentication →
+   „Jetzt starten“. Für die Spieler muss kein Anbieter eingeschaltet werden
+   (Custom Tokens gehen immer).
+   **Achtung Admin-Zugang:** Die Regeln verlangen jetzt eine *bestätigte*
+   E-Mail (`email_verified`). Mit Google-Login ist das automatisch so. Falls
+   dein Admin-Panel E-Mail/Passwort nutzt: vorher die Mail bestätigen,
+   sonst sperrst du dich aus.
+3. **Worker deployen:** `npx wrangler deploy` (alte Seite läuft damit weiter).
+4. **Seite deployen:** PR mergen (GitHub Pages).
+5. **Regeln einspielen:** Inhalt von `database.rules.json` in der Konsole
+   unter Realtime Database → Regeln einfügen → „Veröffentlichen“.
+6. **Alte Hashes umziehen:**
+   `node migrate.mjs pfad/zur/service-account.json` (Vorschau), dann mit
+   `--apply`. Verschiebt alle öffentlichen `users/*/passHash` nach
+   `creds/` und löscht die alten Passwort-Kopien (`pwenc`).
+
+**Was sich für Spieler ändert:** Alle müssen sich einmal neu einloggen.
+Neue Passwörter brauchen mindestens 8 Zeichen (alte gehen weiter).
+„Passwort vergessen?“ im Login setzt das Passwort per
+Wiederherstellungs-Code selbst zurück.
+
+**Support-Abläufe:**
+- *Passwort zurücksetzen:* nicht mehr den passHash löschen (das hätte jeder
+  ausnutzen können). Stattdessen: Codes von vor dem Update gelten erst nach
+  Prüfung – wenn der Beweis in der Anfrage stimmt, in der Konsole
+  `creds/<uid>/recoveryTrusted` auf `true` setzen. Dann kann der Spieler
+  „Passwort vergessen?“ mit seinem Code benutzen.
+- *Account entsperren* (nach 5 Fehlversuchen 15 Min. gesperrt):
+  `creds/<uid>/lockUntil` löschen.
