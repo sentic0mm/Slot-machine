@@ -8,24 +8,13 @@
 //      Login gibt ein signiertes Session-Token (HMAC, Geheimnis kennt nur der
 //      Worker) für die Routen unten zurück, plus ein Firebase-Custom-Token,
 //      mit dem sich die Seite bei Firebase Auth anmeldet.
-//   2) POST /leaderboard  { token, name, handle, playtimeIncrement?, money? }
-//      -> prüft das Token, prüft die Werte (playtime nur steigend + max.
-//      +120 pro Schreibvorgang, money >= 0 und darf pro Schreibvorgang
-//      höchstens das 1000-fache des bisherigen Werts sein - siehe
-//      MONEY_GROWTH_FACTOR, blockt "Konsole auf, Fantasiezahl eintippen"),
-//      und schreibt danach MIT ADMIN-RECHTEN nach leaderboard/<uid> - an den
-//      (jetzt für Clients gesperrten) DB-Regeln vorbei. Das ist nur der
-//      Rangliste-REKORD (höchster je erreichter Stand), nicht der aktuell
-//      einsetzbare Kontostand - siehe walletSync unten.
-//   3) POST /wallet  { token, mode, amount } -> der ECHTE, aktuell
-//      einsetzbare Online-Kontostand (getrennt pro Modus: classic/mega/
-//      ultra), damit derselbe Account auf einem zweiten Gerät denselben
-//      Stand sieht statt bei 10$ neu zu starten. Verluste (amount sinkt)
-//      immer erlaubt, Zuwächse mit derselben Zuwachsrate-Grenze wie money
-//      oben. Landet in walletSync/<uid> - komplett gesperrt für Clients
-//      (auch Lesen), nur über /login (liefert den Stand mit) und /wallet
-//      erreichbar, da es (anders als die öffentliche Rangliste) niemand
-//      sonst etwas angeht.
+//   1) POST /spin, /balance, /wallet/reset, /mp/start, /mp/spin -> der
+//      Worker würfelt selbst und verwaltet Kontostand, Rangliste-Rekord und
+//      Lobby-Geld (siehe spin.js / game.js). Clients können kein Geld mehr
+//      melden.
+//   2) POST /leaderboard  { token, name, handle, playtimeIncrement? }
+//      -> Name/Handle und Spielzeit (Spielzeit mit Tempolimit: nie mehr
+//      gutgeschrieben als seit dem letzten Schreiben vergangen ist).
 //
 // Passwörter liegen nur noch als PBKDF2-Hash unter creds/<uid> (für Clients
 // gesperrt). Der alte, öffentlich lesbare users/<uid>/passHash wird beim
@@ -44,55 +33,11 @@ const TOKEN_TTL_SEC = 30 * 24 * 60 * 60; // Session-Token 30 Tage gültig - war
 const LB_PLAYTIME_MAX_DELTA = 120;       // wie zuvor in database.rules.json
 const NAME_MAX = 40;
 const HANDLE_MAX = 20;
-// Höchster Multiplikator im Spiel ist der Grid-Jackpot mit x500 (JACKPOT_MULT
-// in index.html), Einsatz selbst ist unbegrenzt. x1000 lässt jedem echten
-// Gewinn (auch mehrere Spins auf einmal) reichlich Luft, blockt aber
-// "Konsole auf -> Fantasiezahl eintippen". MONEY_MIN_JUMP ist der Boden für
-// kleine Kontostände, damit ein Sprung von z.B. 10$ auf einen ordentlichen
-// vierstelligen Gewinn nicht am *1000 von quasi-Null scheitert.
-const MONEY_GROWTH_FACTOR = 1000;
-const MONEY_MIN_JUMP = 10000;
-const WALLET_MODES = ["classic", "mega", "ultra"];
-// Zeitfenster für die Zuwachs-Grenze: innerhalb von MONEY_WINDOW_SEC darf der
-// Wert höchstens auf das MONEY_GROWTH_FACTOR-fache des Werts zu Fensterbeginn
-// steigen. Vorher galt die Grenze PRO ANFRAGE - mit vier Anfragen in einer
-// Schleife kam man so von 10$ auf 10^13$.
-const MONEY_WINDOW_SEC = 60;
-// Allererster Eintrag eines Accounts (noch kein Vorwert in der DB): vorher
-// komplett unbegrenzt, jetzt höchstens das hier.
-const FIRST_MONEY_MAX = 10000;
 // Etwas Luft für Uhren-/Netzwerk-Schwankungen bei der Spielzeit.
 const PLAYTIME_SLACK_SEC = 5;
 
-// Prüft, ob ein Zuwachs von cur -> v plausibel ist (siehe MONEY_GROWTH_FACTOR
-// oben). Verluste (v <= cur) sind hier immer erlaubt, nur Zuwächse werden
-// begrenzt - genutzt sowohl für den Rangliste-Rekord als auch für den
-// echten Kontostand-Sync.
-function isMoneyJumpOk(base, v) {
-  const maxAllowed = Math.max(base * MONEY_GROWTH_FACTOR, base + MONEY_MIN_JUMP);
-  return v <= maxAllowed;
-}
-
-// Prüft einen neuen Geldwert gegen das Zeitfenster in guard[key] und
-// aktualisiert das Fenster. cur = aktueller Wert in der DB (null = noch keiner).
-// Gibt true zurück, wenn der Wert erlaubt ist.
-function checkMoneyWindow(guard, key, cur, v, now) {
-  if (cur === null) {
-    if (v > FIRST_MONEY_MAX) return false;
-    guard[key] = { start: now, base: v };
-    return true;
-  }
-  if (v <= cur) return true; // Verluste immer ok, Fenster bleibt
-  let win = guard[key];
-  if (!win || typeof win.start !== "number" || now - win.start >= MONEY_WINDOW_SEC) {
-    win = { start: now, base: cur };
-  }
-  if (!isMoneyJumpOk(win.base, v)) return false;
-  guard[key] = win;
-  return true;
-}
-
 import { makeAuthHandlers } from "./auth.js";
+import { makeSpinHandlers } from "./spin.js";
 
 export default {
   async fetch(request, env) {
@@ -117,7 +62,18 @@ export default {
       } else if (request.method === "POST" && url.pathname === "/leaderboard") {
         resp = await handleLeaderboardWrite(request, env);
       } else if (request.method === "POST" && url.pathname === "/wallet") {
-        resp = await handleWalletSync(request, env);
+        // Abgeschaltet: Kontostände ändert nur noch /spin (siehe spin.js).
+        resp = jsonResponse({ ok: false, error: "deprecated" }, 410);
+      } else if (request.method === "POST" && url.pathname === "/spin") {
+        resp = await spins.handleSpin(request, env);
+      } else if (request.method === "POST" && url.pathname === "/balance") {
+        resp = await spins.handleBalance(request, env);
+      } else if (request.method === "POST" && url.pathname === "/wallet/reset") {
+        resp = await spins.handleWalletReset(request, env);
+      } else if (request.method === "POST" && url.pathname === "/mp/start") {
+        resp = await spins.handleMpStart(request, env);
+      } else if (request.method === "POST" && url.pathname === "/mp/spin") {
+        resp = await spins.handleMpSpin(request, env);
       } else {
         resp = jsonResponse({ ok: false, error: "not_found" }, 404);
       }
@@ -183,22 +139,7 @@ async function handleLeaderboardWrite(request, env) {
     console.log("leaderboard " + uid + ": playtime " + (Number(current) || 0) + " + " + credited + " (angefragt " + inc + ") = " + update.playtime);
   }
 
-  if (body.money !== undefined) {
-    const v = Number(body.money);
-    if (!Number.isFinite(v) || v < 0) {
-      console.log("leaderboard " + uid + ": money abgelehnt (Wert: " + body.money + ", muss >= 0 sein)");
-      return jsonResponse({ ok: false, error: "bad_money" }, 400);
-    }
-    // Zuwachsrate pro Zeitfenster begrenzen, siehe checkMoneyWindow.
-    const currentRaw = await fbGet(env, "leaderboard/" + encodeURIComponent(uid) + "/money.json");
-    const cur = currentRaw === null ? null : (Number(currentRaw) || 0);
-    if (!checkMoneyWindow(guard, "lb", cur, v, now)) {
-      console.log("leaderboard " + uid + ": money-Sprung abgelehnt (" + cur + " -> " + v + ")");
-      return jsonResponse({ ok: false, error: "bad_money_jump" }, 400);
-    }
-    update.money = v;
-    console.log("leaderboard " + uid + ": money = " + v);
-  }
+  // money kommt nicht mehr vom Client - den Rekord trägt /spin selbst ein.
 
   if (Object.keys(update).length === 0) {
     console.log("leaderboard " + uid + ": Anfrage ohne verwertbare Felder abgelehnt");
@@ -215,51 +156,6 @@ async function handleLeaderboardWrite(request, env) {
   }
   await fbPatch(env, "leaderboard/" + encodeURIComponent(uid) + ".json", update);
   console.log("leaderboard " + uid + ": erfolgreich geschrieben (" + Object.keys(update).filter(k => k !== "updatedAt").join(", ") + ")");
-  return jsonResponse({ ok: true });
-}
-
-// Echter, aktuell einsetzbarer Kontostand pro Modus - nicht der öffentliche
-// Rangliste-Rekord. Verluste immer erlaubt, Zuwächse mit derselben
-// Zuwachsrate-Grenze wie beim Rangliste-Geld.
-async function handleWalletSync(request, env) {
-  const body = await readJson(request);
-  const payload = await verifyToken(body.token, env.WORKER_SECRET);
-  if (!payload) {
-    console.log("wallet: Token ungueltig oder abgelaufen abgelehnt");
-    return jsonResponse({ ok: false, error: "invalid_token" }, 401);
-  }
-  const uid = payload.uid;
-
-  const mode = body.mode;
-  if (!WALLET_MODES.includes(mode)) {
-    console.log("wallet " + uid + ": unbekannter Modus abgelehnt (" + body.mode + ")");
-    return jsonResponse({ ok: false, error: "bad_mode" }, 400);
-  }
-
-  const v = Number(body.amount);
-  if (!Number.isFinite(v) || v < 0) {
-    console.log("wallet " + uid + "/" + mode + ": Betrag abgelehnt (Wert: " + body.amount + ", muss >= 0 sein)");
-    return jsonResponse({ ok: false, error: "bad_amount" }, 400);
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const { guard, etag: guardEtag } = await loadGuard(env, uid);
-  const currentRaw = await fbGet(env, "walletSync/" + encodeURIComponent(uid) + "/" + mode + ".json");
-  const cur = currentRaw === null ? null : (Number(currentRaw) || 0);
-  if (!checkMoneyWindow(guard, "w_" + mode, cur, v, now)) {
-    console.log("wallet " + uid + "/" + mode + ": Sprung abgelehnt (" + cur + " -> " + v + ")");
-    return jsonResponse({ ok: false, error: "bad_wallet_jump" }, 400);
-  }
-  if (!await saveGuard(env, uid, guard, guardEtag)) {
-    console.log("wallet " + uid + "/" + mode + ": parallele Anfrage abgelehnt");
-    return jsonResponse({ ok: false, error: "busy" }, 429);
-  }
-
-  const update = {};
-  update[mode] = v;
-  update.updatedAt = { ".sv": "timestamp" };
-  await fbPatch(env, "walletSync/" + encodeURIComponent(uid) + ".json", update);
-  console.log("wallet " + uid + "/" + mode + ": erfolgreich gespeichert (" + v + ")");
   return jsonResponse({ ok: true });
 }
 
@@ -475,3 +371,5 @@ const auth = makeAuthHandlers({
   fbGet, fbGetEtag, fbPut, fbPatch, jsonResponse, readJson, signToken, verifyToken,
   sha256, getServiceAccount, b64url, b64urlFromBuffer, importPrivateKey, TOKEN_TTL_SEC
 });
+
+const spins = makeSpinHandlers({ fbGet, fbGetEtag, fbPut, fbPatch, jsonResponse, readJson, verifyToken });

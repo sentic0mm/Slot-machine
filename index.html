@@ -2258,6 +2258,69 @@ async function celebrateWin(steps) {
     disp.classList.remove("celebrate");
 }
 
+// ---------- Serverseitige Spins ----------
+// Online-Konten und Multiplayer-Runden würfelt der Worker (siehe
+// leaderboard-worker/src/spin.js). Gäste und Offline-Konten zählen nirgends
+// und würfeln weiter hier im Browser.
+function spinRemoteKind() {
+    if (!account || !account.lbToken) return null;
+    if (mpGame.active) return mpLobbyCode && mpMyId ? "mp" : null;
+    if (offlineMode || easyMode) return null;
+    return "solo";
+}
+
+const SPIN_ERRORS = {
+    insufficient: "Kein Geld mehr!",
+    round_over: "⏱ Zeit abgelaufen!",
+    not_playing: "⏱ Runde ist nicht aktiv.",
+    not_in_lobby: "❌ Du bist nicht (mehr) in dieser Lobby.",
+    invalid_token: "🔑 Bitte einmal neu einloggen.",
+    busy: "⏳ Zu viele Spins gleichzeitig – kurz warten."
+};
+
+async function spinRemote(kind, bet) {
+    const body = kind === "mp"
+        ? { token: account.lbToken, code: mpLobbyCode, pid: mpMyId, bet }
+        : { token: account.lbToken, mode: gameMode, bet };
+    let resp, data;
+    try {
+        resp = await fetch(LB_WORKER_URL + (kind === "mp" ? "/mp/spin" : "/spin"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+        data = await resp.json();
+    } catch (e) {
+        throw new Error("❌ Server nicht erreichbar – Online-Spins brauchen Internet.");
+    }
+    if (!resp.ok || !data.ok) {
+        if (data && data.error === "invalid_token") maybeShowLbTokenWarning();
+        const err = new Error(SPIN_ERRORS[data && data.error] || ("❌ Fehler: " + (data && data.error)));
+        if (data && typeof data.balance === "number") err.balance = data.balance;
+        throw err;
+    }
+    return data;
+}
+
+// Kontostände vom Server holen (nach Login, beim Start, beim Moduswechsel)
+async function lbRefreshBalances() {
+    if (!account || !account.lbToken || offlineMode) return;
+    try {
+        const resp = await fetch(LB_WORKER_URL + "/balance", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: account.lbToken })
+        });
+        const data = await resp.json();
+        if (!data.ok || !account || offlineMode) return;
+        for (const m of Object.keys(data.balances)) saveWallet(m, data.balances[m], false);
+        if (!spinning && !mpGame.active && !easyMode) {
+            money = data.balances[gameMode];
+            updateMoney();
+        }
+    } catch (e) {}
+}
+
 async function startSpin() {
     updateUIState();
 
@@ -2307,6 +2370,10 @@ async function startSpin() {
             break;
         }
 
+        // Online-Konto / Multiplayer: der Server würfelt und bucht ab
+        const remoteKind = spinRemoteKind();
+        let remote = null;
+
         money -= bet;
         updateMoney();
 
@@ -2314,13 +2381,27 @@ async function startSpin() {
         statusBox.innerText = "🎰 Dreht...";
         clearHighlights();
 
+        if (remoteKind) {
+            try {
+                remote = await spinRemote(remoteKind, bet);
+            } catch (err) {
+                money += bet;
+                if (err.balance !== undefined) money = err.balance;
+                updateMoney();
+                statusBox.className = "status lose";
+                statusBox.innerText = err.message;
+                break;
+            }
+        }
+
         let win = 0;
         let steps = [];
         let forcedLose = false;
 
         if (gameMode !== "classic") {
             let grid;
-            if (forceLose) { forceLose = false; forcedLose = true; grid = makeLoseGrid(); }
+            if (remote) grid = remote.symbols;
+            else if (forceLose) { forceLose = false; forcedLose = true; grid = makeLoseGrid(); }
             else grid = makeMegaGrid(easyMode);
 
             // Walzen gestaffelt anhalten (links zuerst)
@@ -2347,7 +2428,8 @@ async function startSpin() {
         } else {
             // Klassisch 3×1
             let triple;
-            if (forceLose) { forceLose = false; forcedLose = true; triple = makeLoseTriple(); }
+            if (remote) triple = remote.symbols;
+            else if (forceLose) { forceLose = false; forcedLose = true; triple = makeLoseTriple(); }
             else if (easyMode) {
                 // Nerf: vorher 60% Gewinn / 6% Jackpot = ca. +68% Erwartungswert pro Einsatz
                 // (reiner Geld-Exploit). Jetzt 42% Gewinn / 2% Jackpot = ca. 0% (fair, aber
@@ -2397,7 +2479,9 @@ async function startSpin() {
             for (const st of steps) highlightCells(st.cells);
         }
 
-        money += win;
+        // Bei Server-Spins gilt der Kontostand vom Server (gleiches Ergebnis,
+        // aber so kann nichts auseinanderlaufen)
+        money = remote ? remote.balance : money + win;
         updateMoney();
 
         await new Promise(r => setTimeout(r, 500));
@@ -2432,6 +2516,7 @@ document.getElementById("btnMode").addEventListener("click", () => {
     if (spinning) return;
     const next = MODE_ORDER[(MODE_ORDER.indexOf(gameMode) + 1) % MODE_ORDER.length];
     setMode(next, true);
+    lbRefreshBalances();
     statusBox.className = "status";
     statusBox.innerText = next === "classic"
         ? "Klassisch-Konto: 3 gleiche = Jackpot"
@@ -2448,7 +2533,28 @@ document.getElementById("refreshSite").addEventListener("click", () => {
     window.location.reload();
 });
 
-document.getElementById("btnRefresh").addEventListener("click", () => {
+document.getElementById("btnRefresh").addEventListener("click", async () => {
+    if (spinRemoteKind() === "solo") {
+        if (spinning) return; // Server-Spin läuft schon, das Ergebnis steht fest
+        try {
+            const resp = await fetch(LB_WORKER_URL + "/wallet/reset", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token: account.lbToken, mode: gameMode })
+            });
+            const data = await resp.json();
+            if (!data.ok) throw new Error(data.error);
+            money = data.balance;
+            updateMoney();
+            statusBox.className = "status";
+            statusBox.innerText = "💰 Geld zurückgesetzt!";
+        } catch (e) {
+            statusBox.className = "status lose";
+            statusBox.innerText = "❌ Zurücksetzen fehlgeschlagen – Internet da?";
+        }
+        return;
+    }
+    if (mpGame.active) return; // im Multiplayer gibt es kein Nachschub-Geld
     if (spinning) {
         forceLose = true;
         money = 10;
@@ -3439,19 +3545,6 @@ async function lbApiWrite(fields) {
     }
 }
 
-// Meldet den echten, aktuell einsetzbaren Online-Kontostand (nicht nur den
-// Rangliste-Rekord) - damit derselbe Account auf einem anderen Gerät
-// denselben Stand sieht statt bei 10$ neu zu starten.
-async function lbApiWalletSync(mode, amount) {
-    if (!lbTokenValid()) { maybeShowLbTokenWarning(); return false; }
-    try {
-        return await lbWorkerPost("/wallet",
-            { token: account.lbToken, mode, amount }, "Kontostand-Sync");
-    } catch (e) {
-        console.warn("Kontostand-Sync: Worker nicht erreichbar", e);
-        return false;
-    }
-}
 
 function lbBestKey(uid) { return "lbBestMoney_" + uid; }
 
@@ -3570,50 +3663,15 @@ window.addEventListener("pagehide", () => {
 });
 
 // ----- Moneten-Rekord -----
-function lbNoteMoney() {
-    if (!lbState.ready || !account || easyMode || offlineMode || mpGame.active || mpRole) return;
-    const v = Math.round((Number(money) || 0) * 100) / 100;
-    if (!(v > lbState.bestMoney) || !isFinite(v)) return;
-    lbState.bestMoney = v;
-    localStorage.setItem(lbBestKey(account.uid), String(v));
-    // Bei Auto-Spins nicht jeden Spin schreiben – kurz sammeln
-    clearTimeout(lbState.moneyTimer);
-    lbState.moneyTimer = setTimeout(lbPushMoney, 3000);
-}
+// Geld-Rekord und Kontostand trägt der Server bei jedem Spin selbst ein
+// (siehe spinRemote). Hier bleibt nur der Name in der Rangliste.
+function lbNoteMoney() {}
+function lbNoteWalletSync() {}
+function lbPushWalletSync() { lbState.walletSyncTimer = null; }
 
 function lbPushMoney() {
     if (!account) return;
-    const data = lbBaseData();
-    data.money = lbState.bestMoney;
-    lbApiWrite(data).then(r => {
-        if (r === "jump") {
-            clearTimeout(lbState.moneyTimer);
-            lbState.moneyTimer = setTimeout(lbPushMoney, LB_JUMP_RETRY_MS);
-        }
-    });
-}
-
-// ----- Echter Online-Kontostand (Cross-Device-Sync) -----
-// Anders als lbNoteMoney() (nur der Rangliste-REKORD) reagiert das auf
-// JEDE Änderung, auch Verluste - damit derselbe Account auf einem zweiten
-// Gerät denselben Stand sieht statt bei 10$ neu zu starten.
-function lbNoteWalletSync() {
-    if (!account || offlineMode || mpGame.active || mpRole) return;
-    clearTimeout(lbState.walletSyncTimer);
-    lbState.walletSyncTimer = setTimeout(lbPushWalletSync, 3000);
-}
-
-// Liest gameMode/money erst beim tatsächlichen Absenden (nicht beim
-// Timer-Start) - so geht bei mehreren schnellen Änderungen immer der
-// aktuellste Stand raus, nicht ein zwischenzeitlich veralteter.
-function lbPushWalletSync() {
-    lbState.walletSyncTimer = null;
-    if (!account || offlineMode) return;
-    lbApiWalletSync(gameMode, money).then(r => {
-        if (r === "jump" && !lbState.walletSyncTimer) {
-            lbState.walletSyncTimer = setTimeout(lbPushWalletSync, LB_JUMP_RETRY_MS);
-        }
-    });
+    lbApiWrite(lbBaseData());
 }
 
 // Nach Login / beim Start: lokalen Rekord mit der Datenbank abgleichen.
@@ -3623,23 +3681,12 @@ async function lbInitAccount() {
     lbState.pendingSec = 0;
     if (!fdb || !account) return;
     const uid = account.uid;
-    let best = parseFloat(localStorage.getItem(lbBestKey(uid))) || 0;
-    for (const m of ["classic", "mega", "ultra"]) {
-        const w = loadWallet(m, false);
-        if (w !== null && isFinite(w) && w > best) best = w;
-    }
-    best = Math.round(best * 100) / 100;
-    lbState.bestMoney = best;
+    lbRefreshBalances();
     try {
         const entry = (await fdb.ref("leaderboard/" + uid).get()).val() || {};
         if (!account || account.uid !== uid) return;
-        const dbBest = Number(entry.money) || 0;
-        if (dbBest > lbState.bestMoney) {
-            lbState.bestMoney = dbBest;
-            localStorage.setItem(lbBestKey(uid), String(dbBest));
-        } else if (lbState.bestMoney > dbBest || entry.name !== mpGetName()) {
-            lbPushMoney(); // trägt auch Namensänderungen nach
-        }
+        lbState.bestMoney = Number(entry.money) || 0;
+        if (entry.name && entry.name !== mpGetName()) lbPushMoney(); // Namensänderung nachtragen
     } catch (e) {
         console.warn("Rangliste nicht erreichbar:", e);
     }
@@ -5247,21 +5294,15 @@ document.getElementById("btnLeaveLobby").addEventListener("click", () => {
 document.getElementById("btnStartGame").addEventListener("click", () => {
     if (mpRole !== "host" || !mpRef || mpGame.active) return;
 
-    const updates = {
-        status: "playing",
-        startedAt: firebase.database.ServerValue.TIMESTAMP,
-        result: null
-    };
-
-    // Alle Spieler bekommen das Startgeld
-    const players = (mpLobbyData && mpLobbyData.players) || {};
-    for (const id of Object.keys(players)) {
-        updates["players/" + id + "/money"] = mpSettings.startMoney;
-    }
-
-    mpRef.update(updates).catch(err => {
-        document.getElementById("lobbyHint").innerText = mpFriendlyError(err);
-    });
+    // Startgeld verteilt der Server (Clients dürfen Lobby-Geld nicht schreiben)
+    const hint = document.getElementById("lobbyHint");
+    fetch(LB_WORKER_URL + "/mp/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: account && account.lbToken, code: mpLobbyCode })
+    }).then(r => r.json()).then(data => {
+        if (!data.ok) hint.innerText = "❌ Runde konnte nicht starten (" + data.error + ")";
+    }).catch(() => { hint.innerText = "❌ Server nicht erreichbar."; });
 });
 
 function mpStartRound(data) {
@@ -5353,11 +5394,8 @@ function mpWriteResult() {
     mpRef.update({ status: "finished", result: { ranking: ranking } }).catch(() => {});
 }
 
-function mpReportMoney() {
-    if (mpRef && mpMyId && mpGame.active) {
-        mpRef.child("players/" + mpMyId + "/money").set(money).catch(() => {});
-    }
-}
+// Das Lobby-Geld schreibt der Server bei jedem Spin selbst (/mp/spin).
+function mpReportMoney() {}
 
 // ---------- Scoreboard ----------
 

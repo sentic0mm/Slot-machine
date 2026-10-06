@@ -96,3 +96,19 @@ Wiederherstellungs-Code selbst zurück.
   „Passwort vergessen?“ mit seinem Code benutzen.
 - *Account entsperren* (nach 5 Fehlversuchen 15 Min. gesperrt):
   `creds/<uid>/lockUntil` löschen.
+
+## Serverseitige Spins
+
+Online-Konten und Multiplayer-Runden würfelt der Worker (`src/spin.js`,
+Spiellogik in `src/game.js`, sicherer Zufall). Der Browser zeigt nur noch
+das Ergebnis an. Kontostand (`walletSync/`), Rangliste-Rekord und
+Lobby-Geld schreibt nur noch der Worker; Werte aus der Konsole werden beim
+nächsten Spin einfach durch den echten Stand ersetzt. Gäste und
+Offline-Konten zählen nirgends und würfeln weiter lokal.
+
+**Wichtig:** `src/game.js` und die Spiellogik in `index.html` müssen gleich
+bleiben. Wer Gewinne oder Wahrscheinlichkeiten ändert, ändert beides.
+
+**Deploy:** Worker + Seite + neue Regeln (Lobby-Geld ist jetzt für Clients
+gesperrt) zusammen einspielen. Mit alter Seite und neuem Worker gehen
+Online-Spins weiter lokal, werden aber nicht mehr gespeichert.
