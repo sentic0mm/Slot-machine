@@ -85,15 +85,15 @@ h2.sp { margin-top: 18px; }
   <p class="muted">Dieser Browser ist noch nicht freigegeben. Er hat gerade einen eigenen Schlüssel erzeugt, der ihn nie verlässt. Gib den öffentlichen Teil einmalig frei:</p>
   <ol class="muted">
     <li>Text unten kopieren</li>
-    <li>Im Ordner <code>admin-worker</code>: <code>npx wrangler secret put ADMIN_DEVICE_KEYS</code></li>
-    <li>Einfügen, Enter, kurz warten, dann „Neu prüfen“</li>
+    <li>Cloudflare-Dashboard → Workers &amp; Pages → <code>slotmachine-admin</code> → Settings → Variables and Secrets → Add → Typ „Secret“, Name <code>ADMIN_DEVICE_KEYS</code></li>
+    <li>Als Wert einfügen, speichern, kurz warten, dann „Neu prüfen“</li>
   </ol>
   <textarea id="devKey" readonly></textarea>
   <div class="row">
     <button class="ghost" id="btnCopyKey">Kopieren</button>
     <button class="primary" id="btnRecheck">Neu prüfen</button>
   </div>
-  <p class="muted">Mehrere Geräte: alle Schlüssel in eine Liste <code>[{…},{…}]</code> packen, der Befehl ersetzt die alte Liste.</p>
+  <p class="muted">Mehrere Geräte: alle Schlüssel in eine Liste <code>[{…},{…}]</code> packen und den Wert ersetzen.</p>
   <div class="msg" id="devMsg"></div>
 </section>
 

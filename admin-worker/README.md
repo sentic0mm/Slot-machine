@@ -28,74 +28,84 @@ im **Solo-Online-Modus** (Klassisch / MultiGrid / UltraGrid) oder in einer
 Jede Geld-Änderung steht in den Worker-Logs (Dashboard → slotmachine-admin →
 Observability): wer, wem, wie viel, neuer Stand.
 
-## Einrichtung (einmalig)
+## Einrichtung (einmalig) – nur im Browser, kein Terminal
 
 Voraussetzung: Der Spiel-Worker `slotmachine-leaderboard` läuft schon im
 selben Cloudflare-Konto (der Admin-Worker meldet dich intern darüber an).
+Hochgeladen wird der Admin-Worker von GitHub selbst
+(`.github/workflows/deploy-admin.yml`).
 
-### 1. Installieren
-```bash
-cd admin-worker
-npm install
-npx wrangler login
-```
+### 1. Cloudflare-Zugang für GitHub
+1. https://dash.cloudflare.com → oben rechts Profil → **My Profile** →
+   **API Tokens** → **Create Token** → Vorlage **„Edit Cloudflare Workers“**
+   → **Use template**. Bei *Account Resources* dein Konto wählen, bei *Zone
+   Resources* „All zones“ lassen → **Continue to summary** → **Create Token**.
+   Token kopieren (wird nur einmal angezeigt).
+2. **Account ID:** Dashboard → **Workers & Pages** → rechts in der Seitenleiste
+   „Account ID“ → kopieren.
 
-### 2. Geheimnisse setzen
-```bash
-npx wrangler secret put FIREBASE_SERVICE_ACCOUNT_KEY   # dieselbe JSON wie beim Spiel-Worker
-npx wrangler secret put ADMIN_SECRET                   # neues Zufalls-Geheimnis, s.u.
-npx wrangler secret put ADMIN_UID                      # deine Spieler-UID (steht im Spiel-Menü hinter deinem @Namen)
-npx wrangler secret put ADMIN_EMAIL                    # deine E-Mail für den Cloudflare-Login
-```
-`ADMIN_SECRET` erzeugen (mind. 32 Zeichen, NICHT dasselbe wie WORKER_SECRET):
-```bash
-node -e "console.log(crypto.randomBytes(32).toString('hex'))"
-```
+### 2. In GitHub eintragen
+Repo → **Settings** → **Secrets and variables** → **Actions** →
+**New repository secret**, zweimal:
+- `CLOUDFLARE_API_TOKEN` = der Token
+- `CLOUDFLARE_ACCOUNT_ID` = die Account ID
 
-### 3. Deployen
-```bash
-npx wrangler deploy
-```
-Ergibt z. B. `https://slotmachine-admin.sentic0mm.workers.dev`. Die Seite
-zeigt bis Schritt 5 nur „noch nicht eingerichtet“ – das ist richtig so.
+### 3. Hochladen
+PR mergen. Danach lädt GitHub den Worker automatisch hoch (Tab **Actions** →
+„Admin-Panel deployen“, grüner Haken = fertig). Später neu starten:
+**Actions** → „Admin-Panel deployen“ → **Run workflow**.
 
-### 4. Cloudflare Access einschalten
-1. Dashboard → **Workers & Pages** → `slotmachine-admin` → **Settings** →
-   **Domains & Routes** → bei `workers.dev` **„Cloudflare Access“ aktivieren**.
-   (Falls du Zero Trust noch nie benutzt hast, führt dich Cloudflare einmal
-   durch die Einrichtung inkl. Team-Name; der Free-Plan reicht.)
-2. Auf **„Manage Cloudflare Access“** → Policy bearbeiten:
-   *Action* **Allow**, *Include* → **Emails** → nur deine Adresse.
-   Alles andere entfernen.
-3. Zwei Werte notieren:
-   - **AUD-Tag:** Zero Trust → Access → Applications → die App → „Application
-     Audience (AUD) Tag“
-   - **Team-Domain:** Zero Trust → Settings → „Team domain“, z. B.
-     `deinname.cloudflareaccess.com`
+Danach gibt es im Dashboard unter **Workers & Pages** einen zweiten Worker
+`slotmachine-admin`. `ADMIN_SECRET` hat GitHub schon automatisch gesetzt.
 
-### 5. Access-Werte eintragen
-```bash
-npx wrangler secret put ACCESS_TEAM_DOMAIN   # z. B. deinname.cloudflareaccess.com (ohne https://)
-npx wrangler secret put ACCESS_AUD           # der AUD-Tag
-```
+### 4. Geheimnisse im Cloudflare-Dashboard eintragen
+**Workers & Pages** → `slotmachine-admin` → **Settings** → **Variables and
+Secrets** → **Add** → Typ **Secret**, für jeden Eintrag:
 
-### 6. Deinen Browser freischalten
-1. Admin-URL öffnen → Cloudflare schickt dir einen Code per Mail.
+| Name | Wert |
+|---|---|
+| `FIREBASE_SERVICE_ACCOUNT_KEY` | Inhalt der Firebase-Schlüsseldatei (JSON). Neue Datei: Firebase-Konsole → Projekteinstellungen → Dienstkonten → „Neuen privaten Schlüssel generieren“ |
+| `ADMIN_UID` | deine Spieler-UID (steht im Spiel-Menü hinter deinem @Namen) |
+| `ADMIN_EMAIL` | deine E-Mail für den Cloudflare-Login |
+
+**Deploy** / **Save** drücken. Die Seite zeigt bis Schritt 6 nur „noch nicht
+eingerichtet“ – das ist richtig so.
+
+### 5. Cloudflare Access einschalten
+1. `slotmachine-admin` → **Settings** → **Domains & Routes** → bei
+   `workers.dev` **„Cloudflare Access“ aktivieren**. (Beim ersten Mal führt
+   Cloudflare dich durch Zero Trust inkl. Team-Name; Free-Plan reicht.)
+2. **„Manage Cloudflare Access“** → Policy: *Action* **Allow**, *Include* →
+   **Emails** → nur deine Adresse. Alles andere entfernen.
+3. Zwei Werte notieren (https://one.dash.cloudflare.com):
+   - **AUD-Tag:** Access → Applications → die App → „Application Audience (AUD) Tag“
+   - **Team-Domain:** Settings → „Team domain“, z. B. `deinname.cloudflareaccess.com`
+
+### 6. Access-Werte eintragen
+Wie in Schritt 4 als **Secret**:
+- `ACCESS_TEAM_DOMAIN` = z. B. `deinname.cloudflareaccess.com` (ohne https://)
+- `ACCESS_AUD` = der AUD-Tag
+
+### 7. Deinen Browser freischalten
+1. https://slotmachine-admin.sentic0mm.workers.dev öffnen → Cloudflare
+   schickt dir einen Code per Mail.
 2. Die Seite zeigt „Browser freischalten“ mit einem Schlüssel `[{"kty":"EC",…}]`
    → **Kopieren**.
-3. `npx wrangler secret put ADMIN_DEVICE_KEYS` → einfügen → Enter.
+3. Wie in Schritt 4 als **Secret** `ADMIN_DEVICE_KEYS` eintragen → speichern.
 4. ~10 Sekunden warten, **„Neu prüfen“** → Login mit deinem Spielkonto.
 
 **Weiteres Gerät** (z. B. Handy + PC): Schlüssel beider Geräte in eine Liste
-packen, `[{…},{…}]`, und neu setzen – der Befehl ersetzt die alte Liste.
-**Gerät verloren:** Schlüssel aus der Liste nehmen und neu setzen, fertig.
+packen, `[{…},{…}]`, und den Secret-Wert ersetzen.
+**Gerät verloren:** Schlüssel aus der Liste nehmen, speichern, fertig.
 Browserdaten gelöscht oder privater Modus = neuer Schlüssel, also neu freigeben.
 
-### 7. Spielseite aktualisieren
-Die neue `index.html` (Live-Hinweis für Spieler) über GitHub Pages
-veröffentlichen. Ohne sie wird das Geld trotzdem gebucht, nur eben „still“.
+### Mit Terminal (falls doch mal vorhanden)
+Statt Schritt 1–4 geht auch: `cd admin-worker && npm install && npx wrangler
+login && npx wrangler deploy`, Secrets per `npx wrangler secret put NAME`.
 
 ## Gut zu wissen
+- **Spielseite:** Mit dem Mergen des PR bekommt auch die Spielseite (GitHub
+  Pages) die Live-Hinweise. Vorher wird das Geld trotzdem gebucht, nur „still“.
 - **Multiplayer:** Geld geht nur in Runden, die gerade **laufen** – beim
   Rundenstart setzt der Server das Geld sowieso auf das Startgeld.
 - **Laufende Spin-Serie im Solo:** Das Geschenk wird auch auf die noch nicht
