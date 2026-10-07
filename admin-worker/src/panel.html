@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Slot Admin</title>
+<style nonce="__NONCE__">
+:root {
+  --bg: #0d0f14; --card: #161a22; --line: #262c38; --text: #e8ecf3; --muted: #8b95a7;
+  --accent: #00ff66; --accent-ink: #04160b; --warn: #ffb020; --bad: #ff5468; --mega: #ff9800; --ultra: #c77dff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 16px; max-width: 720px; margin: 0 auto; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+h1 span { color: var(--accent); }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+.who { color: var(--muted); font-size: 12px; text-align: right; }
+.locks { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.lock { font-size: 12px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.lock.ok { border-color: color-mix(in srgb, var(--accent) 50%, transparent); color: var(--accent); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+input, select, button, textarea { font: inherit; color: inherit; }
+input, select, textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 0; }
+button { border: 0; border-radius: 10px; padding: 11px 16px; cursor: pointer; background: var(--line); }
+button.primary { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+button.ghost { background: transparent; border: 1px solid var(--line); }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 8px; }
+.row > input { flex: 1; }
+.msg { margin-top: 10px; font-size: 14px; min-height: 1em; }
+.msg.bad { color: var(--bad); } .msg.ok { color: var(--accent); } .msg.warn { color: var(--warn); }
+textarea { font: 12px/1.4 ui-monospace, Menlo, monospace; height: 110px; resize: none; }
+code { font: 12px ui-monospace, Menlo, monospace; background: var(--bg); padding: 2px 6px; border-radius: 6px; }
+ol { padding-left: 20px; margin: 8px 0; } ol li { margin: 4px 0; }
+.hits { margin-top: 10px; display: grid; gap: 6px; }
+.hit { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: var(--bg); border: 1px solid var(--line); padding: 10px 12px; }
+.hit.sel { border-color: var(--accent); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); flex: none; }
+.dot.on { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.hit .n { font-weight: 600; } .hit .s { color: var(--muted); font-size: 12px; word-break: break-all; }
+.grow { flex: 1; min-width: 0; }
+.bal { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.bal div { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.bal .m { font-size: 12px; color: var(--muted); }
+.bal .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bal .p { font-size: 11px; color: var(--warn); }
+.c-classic { color: var(--accent); } .c-mega { color: var(--mega); } .c-ultra { color: var(--ultra); }
+.lob { display: flex; justify-content: space-between; gap: 8px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.lob:first-child { border-top: 0; }
+.muted { color: var(--muted); font-size: 13px; }
+.seg { display: flex; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.seg button { flex: 1; background: transparent; padding: 9px; }
+.seg button.on { background: var(--line); font-weight: 600; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.chips button { padding: 6px 12px; font-size: 13px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); }
+.toggle { display: flex; align-items: center; gap: 10px; margin-top: 14px; color: var(--text); font-size: 14px; }
+.toggle input { width: 20px; height: 20px; accent-color: var(--accent); }
+.big { width: 100%; margin-top: 14px; padding: 14px; font-size: 16px; }
+.uidline { color: var(--muted); font-size: 12px; word-break: break-all; margin: -4px 0 12px; }
+h2.sp { margin-top: 18px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎰 Slot <span>Admin</span></h1>
+  <div class="who" id="who"></div>
+</header>
+
+<div class="locks">
+  <span class="lock" id="lockAccess">Cloudflare</span>
+  <span class="lock" id="lockDevice">Browser</span>
+  <span class="lock" id="lockAccount">Konto</span>
+</div>
+
+<section class="card" id="cardBoot"><div class="muted">Prüfe diesen Browser …</div></section>
+
+<section class="card" id="cardDevice" hidden>
+  <h2>Browser freischalten</h2>
+  <p class="muted">Dieser Browser ist noch nicht freigegeben. Er hat gerade einen eigenen Schlüssel erzeugt, der ihn nie verlässt. Gib den öffentlichen Teil einmalig frei:</p>
+  <ol class="muted">
+    <li>Text unten kopieren</li>
+    <li>Cloudflare-Dashboard → Workers &amp; Pages → <code>slotmachine-admin</code> → Settings → Variables and Secrets → Add → Typ „Secret“, Name <code>ADMIN_DEVICE_KEYS</code></li>
+    <li>Als Wert einfügen, speichern, kurz warten, dann „Neu prüfen“</li>
+  </ol>
+  <textarea id="devKey" readonly></textarea>
+  <div class="row">
+    <button class="ghost" id="btnCopyKey">Kopieren</button>
+    <button class="primary" id="btnRecheck">Neu prüfen</button>
+  </div>
+  <p class="muted">Mehrere Geräte: alle Schlüssel in eine Liste <code>[{…},{…}]</code> packen und den Wert ersetzen.</p>
+  <div class="msg" id="devMsg"></div>
+</section>
+
+<section class="card" id="cardLogin" hidden>
+  <h2>Mit deinem Spielkonto anmelden</h2>
+  <label for="inHandle">@Name</label>
+  <input id="inHandle" autocomplete="username" autocapitalize="off" spellcheck="false">
+  <label for="inPass">Passwort</label>
+  <input id="inPass" type="password" autocomplete="current-password">
+  <button class="primary big" id="btnLogin">Anmelden</button>
+  <div class="msg" id="loginMsg"></div>
+</section>
+
+<div id="main" hidden>
+  <section class="card">
+    <h2>Spieler suchen</h2>
+    <div class="row">
+      <input id="inSearch" placeholder="@Name, Nickname oder UID" autocapitalize="off" spellcheck="false">
+      <button class="primary" id="btnSearch">Suchen</button>
+    </div>
+    <div class="hits" id="hits"></div>
+    <div class="msg" id="searchMsg"></div>
+  </section>
+
+  <section class="card" id="cardUser" hidden>
+    <h2 id="uName"></h2>
+    <div class="uidline" id="uMeta"></div>
+    <div class="bal" id="uSolo"></div>
+    <h2 class="sp">Multiplayer</h2>
+    <div id="uLobbies"></div>
+  </section>
+
+  <section class="card" id="cardGrant" hidden>
+    <h2>Geld geben</h2>
+    <label for="selTarget">Wo?</label>
+    <select id="selTarget"></select>
+    <label>Aktion</label>
+    <div class="seg" id="segOp">
+      <button data-op="add" class="on">Dazugeben</button>
+      <button data-op="set">Setzen auf</button>
+    </div>
+    <label for="inAmount" id="amountLabel">Betrag in $ (minus = abziehen)</label>
+    <input id="inAmount" inputmode="decimal" placeholder="z. B. 100">
+    <div class="chips" id="chips">
+      <button data-v="10">10</button><button data-v="100">100</button>
+      <button data-v="1000">1000</button><button data-v="10000">10000</button>
+    </div>
+    <label class="toggle"><input type="checkbox" id="chkLive" checked> Live – Spieler sieht es sofort (mit Hinweis)</label>
+    <p class="muted" id="liveHint">Aus = still: kommt beim nächsten Laden oder Spin an.</p>
+    <button class="primary big" id="btnGrant">Geld geben</button>
+    <div class="msg" id="grantMsg"></div>
+  </section>
+</div>
+
+<script nonce="__NONCE__">
+"use strict";
+const MODES = { classic: "Klassisch", mega: "MultiGrid", ultra: "UltraGrid" };
+const $ = (id) => document.getElementById(id);
+const te = new TextEncoder();
+let keys = null, deviceId = null, token = null, tokenExp = 0;
+let selUid = null, selData = null, op = "add", pollTimer = null;
+
+// ---------- Browser-Schlüssel (bleibt in IndexedDB, nicht exportierbar) ----------
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("slot-admin", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("k");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbGet(k) {
+  const db = await idb();
+  return new Promise((res, rej) => { const q = db.transaction("k").objectStore("k").get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+}
+async function idbPut(k, v) {
+  const db = await idb();
+  return new Promise((res, rej) => { const t = db.transaction("k", "readwrite"); t.objectStore("k").put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); });
+}
+function b64url(buf) {
+  let s = ""; new Uint8Array(buf).forEach(b => s += String.fromCharCode(b));
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function hex(text) {
+  const h = await crypto.subtle.digest("SHA-256", te.encode(text));
+  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+async function loadKeys() {
+  let k = await idbGet("device");
+  if (!k) {
+    k = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+    await idbPut("device", k);
+  }
+  keys = k;
+  const jwk = await crypto.subtle.exportKey("jwk", k.publicKey);
+  const pub = { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y };
+  deviceId = b64url(await crypto.subtle.digest("SHA-256", te.encode(JSON.stringify({ crv: pub.crv, kty: pub.kty, x: pub.x, y: pub.y }))));
+  $("devKey").value = JSON.stringify([pub]);
+}
+
+// ---------- Signierte Anfragen ----------
+async function api(path, body) {
+  const text = JSON.stringify(Object.assign({}, body || {}, token ? { token } : {}));
+  const ts = Date.now();
+  const nonce = b64url(crypto.getRandomValues(new Uint8Array(18)));
+  const msg = ["POST", path, ts, nonce, await hex(text)].join("\n");
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keys.privateKey, te.encode(msg));
+  const resp = await fetch(path, {
+    method: "POST", credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-Admin-Device": deviceId, "X-Admin-Ts": String(ts), "X-Admin-Nonce": nonce, "X-Admin-Sig": b64url(sig) },
+    body: text
+  });
+  let data;
+  try { data = await resp.json(); } catch (e) { data = { ok: false, error: resp.status === 403 ? "access" : "http_" + resp.status }; }
+  if (data.error === "login_required") { logout("⏱ Sitzung abgelaufen – bitte neu anmelden."); }
+  return data;
+}
+
+const ERR = {
+  invalid_login: "❌ Name oder Passwort falsch.", unknown_handle: "❌ Diesen @Namen gibt es nicht.",
+  not_admin: "⛔ Das ist nicht das Admin-Konto.", locked: "🔒 Konto kurz gesperrt (zu viele Fehlversuche).",
+  device_clock_skew: "🕒 Uhrzeit des Geräts stimmt nicht.", device_unknown_device: "⛔ Browser nicht freigegeben.",
+  device_bad_signature: "⛔ Browser-Signatur ungültig.", device_replay: "⛔ Anfrage doppelt.",
+  bad_amount: "❌ Ungültiger Betrag.", would_be_negative: "❌ Stand würde unter 0 fallen.",
+  lobby_not_playing: "⏸ Lobby läuft gerade nicht – Geld geht nur in laufenden Runden.",
+  not_in_lobby: "❌ Spieler ist nicht (mehr) in dieser Lobby.", busy: "⏳ Gerade viel los – nochmal versuchen.",
+  no_user: "❌ Spieler nicht gefunden.", access: "⛔ Cloudflare-Login abgelaufen – Seite neu laden."
+};
+const errText = (d) => ERR[d.error] || ("❌ Fehler: " + (d.error || "unbekannt"));
+function say(id, text, cls) { const el = $(id); el.textContent = text || ""; el.className = "msg" + (cls ? " " + cls : ""); }
+const fmt = (v) => Number(v).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " $";
+
+function show(which) {
+  ["cardBoot", "cardDevice", "cardLogin"].forEach(id => $(id).hidden = id !== which);
+  $("main").hidden = which !== "main";
+}
+function setLock(id, ok) { $(id).classList.toggle("ok", !!ok); $(id).textContent = (ok ? "✓ " : "") + $(id).textContent.replace(/^✓ /, ""); }
+
+// ---------- Ablauf ----------
+async function boot() {
+  try { await loadKeys(); } catch (e) { $("cardBoot").textContent = "❌ Dieser Browser kann keine Schlüssel speichern (privater Modus?)."; return; }
+  const d = await api("/api/device", {});
+  if (d.email) { $("who").textContent = d.email; setLock("lockAccess", true); }
+  if (d.error === "access") { $("cardBoot").textContent = ERR.access; return; }
+  if (!d.ok) {
+    show("cardDevice");
+    if (d.reason && d.reason !== "unknown_device") say("devMsg", ERR["device_" + d.reason] || d.reason, "bad");
+    return;
+  }
+  setLock("lockDevice", true);
+  show("cardLogin");
+  $("inHandle").focus();
+}
+
+async function login() {
+  const btn = $("btnLogin"); btn.disabled = true; say("loginMsg", "…");
+  const d = await api("/api/login", { handle: $("inHandle").value, pass: $("inPass").value });
+  btn.disabled = false;
+  $("inPass").value = "";
+  if (!d.ok) { say("loginMsg", d.error === "locked" && d.retryAfter ? ERR.locked + " Noch " + Math.ceil(d.retryAfter / 60) + " Min." : errText(d), "bad"); return; }
+  token = d.token; tokenExp = d.exp;
+  setLock("lockAccount", true);
+  $("who").textContent += " · @" + d.handle;
+  say("loginMsg", "");
+  show("main");
+  $("inSearch").focus();
+}
+
+function logout(text) {
+  token = null; selUid = null; clearInterval(pollTimer);
+  $("lockAccount").classList.remove("ok"); $("lockAccount").textContent = "Konto";
+  $("who").textContent = $("who").textContent.split(" · ")[0];
+  show("cardLogin"); say("loginMsg", text || "", "warn");
+}
+
+async function search() {
+  const q = $("inSearch").value.trim();
+  if (!q) return;
+  say("searchMsg", "…"); $("hits").textContent = "";
+  const d = await api("/api/search", { q });
+  if (!d.ok) { say("searchMsg", errText(d), "bad"); return; }
+  say("searchMsg", d.hits.length ? "" : "Niemand gefunden.");
+  for (const h of d.hits) {
+    const b = document.createElement("button");
+    b.className = "hit" + (h.uid === selUid ? " sel" : "");
+    const dot = document.createElement("span"); dot.className = "dot" + (h.online ? " on" : "");
+    const g = document.createElement("span"); g.className = "grow";
+    const n = document.createElement("div"); n.className = "n"; n.textContent = (h.nick ? h.nick + " " : "") + "@" + h.handle;
+    const s = document.createElement("div"); s.className = "s"; s.textContent = h.uid + (h.lobby ? " · Lobby " + h.lobby : "");
+    g.append(n, s); b.append(dot, g);
+    b.onclick = () => { document.querySelectorAll(".hit").forEach(x => x.classList.remove("sel")); b.classList.add("sel"); selectUser(h.uid); };
+    $("hits").appendChild(b);
+  }
+  if (d.hits.length === 1) $("hits").firstChild.click();
+}
+
+async function selectUser(uid) {
+  selUid = uid; selData = null;
+  say("grantMsg", "");
+  await refreshUser(true);
+  clearInterval(pollTimer);
+  // Live-Ansicht: Stände alle 4 s neu laden, solange der Tab sichtbar ist
+  pollTimer = setInterval(() => { if (!document.hidden && selUid && token) refreshUser(false); }, 4000);
+}
+
+async function refreshUser(first) {
+  const uid = selUid;
+  const d = await api("/api/user", { uid });
+  if (uid !== selUid || !token) return;
+  if (!d.ok) { if (first) say("searchMsg", errText(d), "bad"); return; }
+  selData = d;
+  $("cardUser").hidden = false; $("cardGrant").hidden = false;
+  $("uName").textContent = (d.user.nick ? d.user.nick + " " : "") + "@" + d.user.handle;
+  $("uMeta").textContent = (d.online ? "🟢 online" : "⚪ offline" + (d.lastSeen ? " · zuletzt " + new Date(d.lastSeen).toLocaleString("de-DE") : "")) + " · " + d.user.uid;
+
+  const solo = $("uSolo"); solo.textContent = "";
+  for (const m of Object.keys(MODES)) {
+    const c = document.createElement("div");
+    const a = document.createElement("div"); a.className = "m c-" + m; a.textContent = MODES[m];
+    const v = document.createElement("div"); v.className = "v"; v.textContent = fmt(d.solo[m].balance);
+    c.append(a, v);
+    if (d.solo[m].waitMs) { const p = document.createElement("div"); p.className = "p"; p.textContent = "Spins laufen noch " + Math.ceil(d.solo[m].waitMs / 1000) + " s"; c.appendChild(p); }
+    solo.appendChild(c);
+  }
+  const lob = $("uLobbies"); lob.textContent = "";
+  if (!d.lobbies.length) { const e = document.createElement("div"); e.className = "muted"; e.textContent = "In keiner Lobby."; lob.appendChild(e); }
+  for (const l of d.lobbies) {
+    const r = document.createElement("div"); r.className = "lob";
+    const a = document.createElement("span");
+    a.textContent = l.code + " · " + (MODES[l.mode] || l.mode) + " · " + (l.status === "playing" ? "▶ läuft" : l.status === "waiting" ? "⏸ wartet" : "■ " + l.status);
+    const b = document.createElement("strong"); b.textContent = fmt(l.money);
+    r.append(a, b); lob.appendChild(r);
+  }
+  fillTargets(d);
+}
+
+function fillTargets(d) {
+  const sel = $("selTarget"), prev = sel.value;
+  sel.textContent = "";
+  for (const m of Object.keys(MODES)) sel.add(new Option("Solo · " + MODES[m] + " (" + fmt(d.solo[m].balance) + ")", "solo:" + m));
+  for (const l of d.lobbies) if (l.status === "playing") sel.add(new Option("Multiplayer · Lobby " + l.code + " (" + fmt(l.money) + ")", "mp:" + l.code + ":" + l.pid));
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+async function grant() {
+  if (!selData) return;
+  let raw = $("inAmount").value.replace(/\s/g, "");
+  if (raw.includes(",")) raw = raw.replace(/\./g, "").replace(",", "."); // 1.000,50 -> 1000.50
+  const amount = Number(raw);
+  if (!raw || !Number.isFinite(amount)) { say("grantMsg", ERR.bad_amount, "bad"); return; }
+  const [kind, a, b] = $("selTarget").value.split(":");
+  const live = $("chkLive").checked;
+  const who = "@" + selData.user.handle;
+  const where = kind === "mp" ? "Lobby " + a : "Solo " + MODES[a];
+  const what = op === "set" ? "auf " + fmt(amount) + " setzen" : (amount >= 0 ? fmt(amount) + " geben" : fmt(-amount) + " abziehen");
+  if (!confirm(who + " · " + where + "\n" + what + (live ? " (live)" : " (still)") + "?")) return;
+  const btn = $("btnGrant"); btn.disabled = true; say("grantMsg", "…");
+  const body = kind === "mp"
+    ? { uid: selUid, target: "mp", code: a, pid: b, op, amount, live }
+    : { uid: selUid, target: "solo", mode: a, op, amount, live };
+  const d = await api("/api/grant", body);
+  btn.disabled = false;
+  if (!d.ok) { say("grantMsg", errText(d), "bad"); return; }
+  say("grantMsg", "✅ " + (d.delta >= 0 ? "+" : "") + fmt(d.delta) + " → neuer Stand " + fmt(d.balance) + (d.live ? " · Spieler wurde benachrichtigt" : " · still"), "ok");
+  $("inAmount").value = "";
+  refreshUser(false);
+}
+
+// ---------- Bedienung ----------
+$("btnLogin").onclick = login;
+$("inPass").onkeydown = (e) => { if (e.key === "Enter") login(); };
+$("btnSearch").onclick = search;
+$("inSearch").onkeydown = (e) => { if (e.key === "Enter") search(); };
+$("btnGrant").onclick = grant;
+$("btnRecheck").onclick = () => { say("devMsg", "…"); show("cardBoot"); boot(); };
+$("btnCopyKey").onclick = async () => {
+  try { await navigator.clipboard.writeText($("devKey").value); say("devMsg", "Kopiert.", "ok"); }
+  catch (e) { $("devKey").select(); say("devMsg", "Markiert – jetzt kopieren.", "warn"); }
+};
+$("segOp").onclick = (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  op = b.dataset.op;
+  $("segOp").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  $("amountLabel").textContent = op === "set" ? "Neuer Stand in $" : "Betrag in $ (minus = abziehen)";
+  $("btnGrant").textContent = op === "set" ? "Stand setzen" : "Geld geben";
+};
+$("chips").onclick = (e) => { const b = e.target.closest("button"); if (b) $("inAmount").value = b.dataset.v; };
+$("chkLive").onchange = () => { $("liveHint").textContent = $("chkLive").checked ? "Aus = still: kommt beim nächsten Laden oder Spin an." : "Still: Spieler merkt es erst beim nächsten Laden oder Spin."; };
+setInterval(() => { if (token && tokenExp && Date.now() / 1000 > tokenExp) logout("⏱ Sitzung abgelaufen – bitte neu anmelden."); }, 10000);
+boot();
+</script>
+</body>
+</html>

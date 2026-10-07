@@ -1,0 +1,66 @@
+# Lädt den Admin-Worker (admin-worker/) automatisch zu Cloudflare hoch -
+# ohne Terminal. Läuft bei jeder Änderung auf main und per Hand im Tab
+# "Actions" -> "Admin-Panel deployen" -> "Run workflow".
+#
+# Benötigt zwei GitHub-Secrets (Settings -> Secrets and variables -> Actions):
+#   CLOUDFLARE_API_TOKEN   (Vorlage "Edit Cloudflare Workers")
+#   CLOUDFLARE_ACCOUNT_ID
+# Alle anderen Geheimnisse trägst du direkt im Cloudflare-Dashboard beim
+# Worker ein (siehe admin-worker/README.md). ADMIN_SECRET wird beim ersten
+# Mal automatisch erzeugt.
+
+name: Admin-Panel deployen
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "admin-worker/**"
+      - "leaderboard-worker/src/game.js"
+      - "leaderboard-worker/src/spin.js"
+      - ".github/workflows/deploy-admin.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-admin
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-worker
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: GitHub-Secrets prüfen
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN und CLOUDFLARE_ACCOUNT_ID fehlen (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Worker hochladen
+        run: npx wrangler deploy
+
+      - name: ADMIN_SECRET beim ersten Mal erzeugen
+        run: |
+          if npx wrangler secret list --format json | grep -q '"ADMIN_SECRET"'; then
+            echo "ADMIN_SECRET ist schon gesetzt."
+          else
+            node -e "console.log(require('crypto').randomBytes(32).toString('hex'))" | npx wrangler secret put ADMIN_SECRET
+            echo "ADMIN_SECRET neu erzeugt."
+          fi
