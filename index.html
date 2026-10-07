@@ -2389,7 +2389,6 @@ async function startSpin() {
             spinning = false;
             savingLocked = false;
             updateUIState();
-            adminGiftAfterSpin();
             return;
         }
         // Der Server hat ggf. weniger gewürfelt (Geld alle / Rundenende)
@@ -2520,7 +2519,6 @@ async function startSpin() {
     spinning = false;
     savingLocked = false; // 🔓 Save wieder frei
     updateUIState();
-    adminGiftAfterSpin();
 }
 
 document.getElementById("lever").addEventListener("click", startSpin);
@@ -3420,7 +3418,6 @@ function myJoinPref() {
 function presenceStart() {
     if (!fdb || !account) return;
     if (presConnRef) { presConnRef.off(); presConnRef = null; }
-    adminGiftStart();
     const ref = fdb.ref("status/" + account.uid);
     presConnRef = fdb.ref(".info/connected");
     presConnRef.on("value", s => {
@@ -3444,66 +3441,6 @@ function presenceStart() {
     });
 }
 
-// ---------- Geschenke vom Admin-Panel (live) ----------
-//
-// Das Admin-Panel (admin-worker/) ändert das Geld direkt in der Datenbank
-// und schreibt bei "Live" zusätzlich users/<uid>/adminGift = { id, kind,
-// mode|code, amount, balance, time }. Hier wird nur der Hinweis gezeigt und
-// der echte Stand vom Server neu geholt - das Geld selbst kommt nie von hier.
-
-let adminGiftRef = null;
-let adminGiftWaiting = null; // Hinweis kam während eines Spins -> danach anwenden
-
-function adminGiftStart() {
-    adminGiftStop();
-    if (!fdb || !account) return;
-    adminGiftRef = fdb.ref("users/" + account.uid + "/adminGift");
-    adminGiftRef.on("value", s => {
-        const g = s.val();
-        if (!g || !g.id || !account) return;
-        const seenKey = "adminGiftSeen_" + account.uid;
-        if (localStorage.getItem(seenKey) === g.id) return;
-        localStorage.setItem(seenKey, g.id);
-        // Alte Hinweise (z.B. beim ersten Laden) nicht nochmal anzeigen -
-        // das Geld ist dann ohnehin schon im Kontostand vom Server.
-        if (typeof g.time === "number" && mpNow() - g.time > 5 * 60 * 1000) return;
-        if (spinning) adminGiftWaiting = g;
-        else adminGiftApply(g);
-    });
-}
-
-function adminGiftStop() {
-    if (adminGiftRef) { adminGiftRef.off(); adminGiftRef = null; }
-    adminGiftWaiting = null;
-}
-
-function adminGiftAfterSpin() {
-    if (!adminGiftWaiting) return;
-    const g = adminGiftWaiting;
-    adminGiftWaiting = null;
-    adminGiftApply(g);
-}
-
-function adminGiftApply(g) {
-    const amount = Number(g.amount) || 0;
-    const text = amount >= 0
-        ? "🎁 Geschenk vom Admin: +" + amount.toFixed(2) + "$"
-        : "🛠 Admin hat " + (-amount).toFixed(2) + "$ abgezogen";
-    const where = g.kind === "mp" ? " (Lobby " + g.code + ")" : (g.mode && MODE_INFO[g.mode] ? " (" + MODE_INFO[g.mode].label + ")" : "");
-    if (g.kind === "mp") {
-        // Lobby-Geld kommt sowieso live über den Lobby-Listener - hier nur
-        // den eigenen Stand übernehmen, wenn es die aktuelle Runde ist.
-        if (!mpGame.active || g.code !== mpLobbyCode) return;
-        const me = mpLobbyData && mpLobbyData.players && mpLobbyData.players[mpMyId];
-        money = me && typeof me.money === "number" ? me.money : Number(g.balance) || money;
-        updateMoney();
-    } else {
-        lbRefreshBalances();
-    }
-    statusBox.className = amount >= 0 ? "status win" : "status lose";
-    statusBox.innerText = text + where;
-}
-
 // Aktuelle Lobby im eigenen Status hinterlegen (für "Freund beitreten")
 function presenceSetLobby(code) {
     if (!fdb || !account) return;
@@ -3513,7 +3450,6 @@ function presenceSetLobby(code) {
 // removeEntry=true, wenn der Account nicht mehr existiert (Eintrag ganz weg)
 function presenceStop(removeEntry) {
     if (presConnRef) { presConnRef.off(); presConnRef = null; }
-    adminGiftStop();
     if (!fdb || !account) return;
     const ref = fdb.ref("status/" + account.uid);
     ref.onDisconnect().cancel().catch(() => {});
