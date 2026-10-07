@@ -30,7 +30,11 @@ const LOGIN_LOCK_SEC = 15 * 60;
 const REG_PER_IP_PER_HOUR = 5;
 const PASS_MIN = 8;          // neue Passwörter; alte (ab 4) gehen beim Login weiter
 const PASS_MAX = 64;
-const HANDLE_RE = /^[A-Za-z0-9_]{3,16}$/;
+const HANDLE_RE = /^[A-Za-z0-9_]{3,16}$/;   // nur für NEUE Namen (Registrierung)
+// Beim Login/Reset nur nachschlagen: alte Namen dürfen anders aussehen
+// (z.B. von Hand angelegt, mit Leerzeichen wie "Sentic0mm Dev"). Verboten
+// sind nur Zeichen, die in Firebase-Pfaden nicht gehen.
+const LOOKUP_RE = /^[^.$#\[\]\/\x00-\x1f\x7f]{1,40}$/;
 const NICK_RE = /^[A-Za-z0-9_ ]{3,16}$/;
 const RECOVERY_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -117,8 +121,9 @@ export function makeAuthHandlers(deps) {
   async function resolveUid(env, body) {
     if (typeof body.uid === "string" && body.uid) return body.uid; // ältere Clients
     const handle = typeof body.handle === "string" ? body.handle.trim().replace(/^@/, "").toLowerCase() : "";
-    if (!HANDLE_RE.test(handle)) return null;
-    return await fbGet(env, "handles/" + enc(handle) + ".json");
+    if (!LOOKUP_RE.test(handle)) return null;
+    const uid = await fbGet(env, "handles/" + enc(handle) + ".json");
+    return typeof uid === "string" && uid ? uid : null;
   }
 
   // Sperre nach zu vielen Fehlversuchen
